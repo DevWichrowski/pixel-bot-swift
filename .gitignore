@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+*.scpt
+
+# Swift Package Manager
+.build/
+Packages/
+Package.resolved
+
+# Xcode
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+# Build Artifacts
+AppIcon.png
+PixelBot.app
+PixelBot.iconset
