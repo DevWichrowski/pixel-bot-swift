@@ -255,16 +255,25 @@ class TibiaBot: ObservableObject {
             self?.manaString = status.manaString
         }
         
+        // Set max HP/Mana from OCR (more accurate than auto-detection)
+        if let maxHP = status.hpMax {
+            healer.setMaxHP(maxHP)
+        }
+        if let maxMana = status.manaMax {
+            healer.setMaxMana(maxMana)
+        }
+        
         // Process healing
         if criticalIsPotion {
             // Special mode: critical and mana share cooldown
+            // Critical heal is handled here with priority over mana
             if let hp = status.hpCurrent, let mana = status.manaCurrent {
                 _ = healer.checkCriticalAndManaWithPriority(currentHP: hp, currentMana: mana)
             }
             
-            // Normal heal still independent
+            // Normal heal is independent (skip critical check - already handled above)
             if let hp = status.hpCurrent {
-                healer.checkAndHeal(currentHP: hp)
+                healer.checkNormalHealOnly(currentHP: hp)
             }
         } else {
             // Standard mode

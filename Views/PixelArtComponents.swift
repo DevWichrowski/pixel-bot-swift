@@ -238,9 +238,8 @@ struct ThresholdRow: View {
             TextField("", text: $threshold)
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(Theme.textBright)
-                .frame(width: 30)
-                .textFieldStyle(.plain)
-                .background(Theme.bgDark)
+                .frame(width: 40, height: 20)
+                .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.center)
             
             Text("%")

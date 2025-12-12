@@ -79,9 +79,8 @@ struct ConfigView: View {
                             
                             TextField("", text: $bot.eaterHotkey)
                                 .font(.system(size: 10, design: .monospaced))
-                                .frame(width: 40)
-                                .textFieldStyle(.plain)
-                                .background(Theme.bgDark)
+                                .frame(width: 50, height: 20)
+                                .textFieldStyle(.roundedBorder)
                                 .multilineTextAlignment(.center)
                         }
                     }
@@ -151,9 +150,8 @@ struct HotkeyRow: View {
             TextField("", text: $hotkey)
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(Theme.textBright)
-                .frame(width: 40)
-                .textFieldStyle(.plain)
-                .background(Theme.bgDark)
+                .frame(width: 50, height: 20)
+                .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.center)
         }
     }

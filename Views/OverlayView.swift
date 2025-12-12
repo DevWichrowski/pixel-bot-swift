@@ -135,6 +135,13 @@ struct TabButton: View {
     }
 }
 
+// MARK: - Keyable Window (allows keyboard input in borderless window)
+
+class KeyableWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
 // MARK: - Overlay Window
 
 class OverlayWindowController: NSObject {
@@ -143,7 +150,7 @@ class OverlayWindowController: NSObject {
     func showWindow() {
         let contentView = OverlayView()
         
-        let window = NSWindow(
+        let window = KeyableWindow(
             contentRect: NSRect(x: 20, y: 100, width: 280, height: 550),
             styleMask: [.borderless],
             backing: .buffered,

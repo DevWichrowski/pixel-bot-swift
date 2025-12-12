@@ -104,10 +104,37 @@ class AutoHealer {
         return nil
     }
     
+    /// Check only normal heal (skip critical) - used when criticalIsPotion mode is enabled
+    /// In that mode, critical heal is handled by checkCriticalAndManaWithPriority
+    @discardableResult
+    func checkNormalHealOnly(currentHP: Int) -> Bool {
+        autoDetectMaxHP(currentHP)
+        
+        guard let max = maxHP else { 
+            print("🟡 checkNormalHealOnly: No maxHP set")
+            return false 
+        }
+        guard !isOnCooldown else { 
+            print("🟡 checkNormalHealOnly: On cooldown")
+            return false 
+        }
+        
+        let hpPercent = getHPPercent(currentHP)
+        print("🟡 checkNormalHealOnly: HP=\(currentHP)/\(max) (\(String(format: "%.1f", hpPercent))%) | Threshold=\(heal.threshold)%")
+        
+        // Only normal heal - critical is handled separately
+        if heal.enabled && hpPercent < Double(heal.threshold) {
+            print("🟡 NORMAL HEAL TRIGGERED: F1")
+            castHeal(heal)
+            return true
+        }
+        
+        return false
+    }
+    
     private func castHeal(_ config: HealConfig) {
         keyPress.pressKey(config.hotkey)
         lastCastTime = Date()
-        print("🩹 Cast heal: \(config.hotkey) (threshold: \(config.threshold)%)")
     }
     
     // MARK: - Mana Restoration
@@ -140,13 +167,19 @@ class AutoHealer {
         autoDetectMaxHP(currentHP)
         autoDetectMaxMana(currentMana)
         
-        guard !isOnCooldown else { return (nil, false) }
+        guard !isOnCooldown else { 
+            print("🔴 checkCriticalAndManaWithPriority: On cooldown")
+            return (nil, false) 
+        }
         
         let hpPercent = maxHP != nil ? getHPPercent(currentHP) : 100.0
         let manaPercent = maxMana != nil ? getManaPercent(currentMana) : 100.0
         
+        print("🔴 checkCriticalAndManaWithPriority: HP=\(String(format: "%.1f", hpPercent))% (crit threshold=\(criticalHeal.threshold)%) | Mana=\(String(format: "%.1f", manaPercent))% (threshold=\(manaRestore.threshold)%)")
+        
         // Priority 1: Critical heal (life-saving)
         if criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold) {
+            print("🔴 CRITICAL HEAL TRIGGERED: F2")
             castHeal(criticalHeal)
             return ("critical", false)
         }
@@ -155,7 +188,7 @@ class AutoHealer {
         if manaRestore.enabled && manaPercent < Double(manaRestore.threshold) {
             keyPress.pressKey(manaRestore.hotkey)
             lastCastTime = Date()
-            print("🔷 Mana restore: \(manaRestore.hotkey) (threshold: \(manaRestore.threshold)%)")
+            print("🔵 Mana restore: \(manaRestore.hotkey) (threshold: \(manaRestore.threshold)%)")
             return (nil, true)
         }
         
@@ -177,19 +210,19 @@ class AutoHealer {
     }
     
     func setHealThreshold(_ value: Int) {
-        if (1...99).contains(value) {
+        if (1...100).contains(value) {
             heal.threshold = value
         }
     }
     
     func setCriticalThreshold(_ value: Int) {
-        if (1...99).contains(value) {
+        if (1...100).contains(value) {
             criticalHeal.threshold = value
         }
     }
     
     func setManaThreshold(_ value: Int) {
-        if (1...99).contains(value) {
+        if (1...100).contains(value) {
             manaRestore.threshold = value
         }
     }

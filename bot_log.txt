@@ -1,0 +1,27 @@
+✅ Config loaded from /Users/patrykwichrowski/Library/Application Support/PixelBot/user_config.json
+📺 Display scale factor: 1.0
+✅ Config saved
+✅ Config saved
+✅ Config saved
+✅ Config saved
+✅ Config saved
+✅ Config saved
+✅ Config saved
+✅ Config saved
+✅ Config saved
+✅ Config saved
+🍖 Auto Eater disabled
+✅ Config saved
+🍖 Food set to: Fire Mushroom (432s)
+✅ Config saved
+✅ Config saved
+⚡ Auto Haste DISABLED
+✅ Config saved
+✅ Config saved
+🔪 Auto Skinner DISABLED (Hotkey: [)
+✅ Config saved
+✅ Config saved
+🍖 Food set to: Fire Mushroom (432s)
+🔪 Skinner listener started
+🤖 Pixel Bot Swift started!
+🤖 Pixel Bot Swift shutting down...

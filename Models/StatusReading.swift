@@ -19,15 +19,17 @@ struct StatusReading {
         return (Double(current) / Double(max)) * 100.0
     }
     
-    /// Formatted HP string
+    /// Formatted HP string with percentage
     var hpString: String {
         guard let current = hpCurrent, let max = hpMax else { return "---/---" }
-        return "\(current)/\(max)"
+        let percent = Int(hpPercent)
+        return "\(current)/\(max) (\(percent)%)"
     }
     
-    /// Formatted Mana string
+    /// Formatted Mana string with percentage
     var manaString: String {
         guard let current = manaCurrent, let max = manaMax else { return "---/---" }
-        return "\(current)/\(max)"
+        let percent = Int(manaPercent)
+        return "\(current)/\(max) (\(percent)%)"
     }
 }

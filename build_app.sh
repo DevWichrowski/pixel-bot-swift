@@ -50,9 +50,13 @@ echo "📋 Copying files..."
 cp "Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
 cp "${BUILD_DIR}/${APP_NAME}" "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
 
-# 5. Codesign
+# 5. Codesign with entitlements
 echo "🔏 Signing application..."
-codesign --force --deep --sign - "${APP_BUNDLE}"
+if [ -f "PixelBot.entitlements" ]; then
+    codesign --force --deep --sign - --entitlements "PixelBot.entitlements" "${APP_BUNDLE}"
+else
+    codesign --force --deep --sign - "${APP_BUNDLE}"
+fi
 
 echo "✅ Build complete! ${APP_BUNDLE} is ready."
 echo "👉 You can move it to your Applications folder or run it directly."
