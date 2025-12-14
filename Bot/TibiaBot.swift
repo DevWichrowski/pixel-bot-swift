@@ -162,6 +162,67 @@ class TibiaBot: ObservableObject {
         configManager.save()
     }
     
+    // MARK: - Presets Management
+    
+    /// Get all presets
+    var presets: [PresetConfig] {
+        configManager.config.presets
+    }
+    
+    /// Get active preset ID
+    var activePresetId: UUID? {
+        configManager.config.activePresetId
+    }
+    
+    /// Create new preset with current settings
+    @discardableResult
+    func createPreset(name: String) -> UUID {
+        let preset = PresetConfig.fromConfig(configManager.config, name: name)
+        configManager.config.presets.append(preset)
+        configManager.config.activePresetId = preset.id
+        configManager.save()
+        print("📦 Created preset: \(name)")
+        return preset.id
+    }
+    
+    /// Load preset settings
+    func loadPreset(id: UUID) {
+        guard let preset = configManager.config.presets.first(where: { $0.id == id }) else { return }
+        
+        configManager.config.applyPreset(preset)
+        configManager.save()
+        loadConfig()
+        print("📦 Loaded preset: \(preset.name)")
+    }
+    
+    /// Save current settings to preset
+    func saveToPreset(id: UUID) {
+        configManager.config.updatePreset(id: id)
+        configManager.save()
+        
+        if let preset = configManager.config.presets.first(where: { $0.id == id }) {
+            print("📦 Saved to preset: \(preset.name)")
+        }
+    }
+    
+    /// Delete preset
+    func deletePreset(id: UUID) {
+        configManager.config.presets.removeAll { $0.id == id }
+        if configManager.config.activePresetId == id {
+            configManager.config.activePresetId = nil
+        }
+        configManager.save()
+        print("📦 Deleted preset")
+    }
+    
+    /// Rename preset
+    func renamePreset(id: UUID, name: String) {
+        guard let index = configManager.config.presets.firstIndex(where: { $0.id == id }) else { return }
+        configManager.config.presets[index].name = name
+        configManager.save()
+        print("📦 Renamed preset to: \(name)")
+    }
+    
     func resetConfig() {
         configManager.reset()
         reader.hpRegion = nil

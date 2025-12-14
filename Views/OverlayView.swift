@@ -22,6 +22,8 @@ struct OverlayView: View {
                     StatusView(bot: bot)
                 case "config":
                     ConfigView(bot: bot)
+                case "presets":
+                    PresetsView(bot: bot)
                 default:
                     StatusView(bot: bot)
                 }
@@ -52,14 +54,23 @@ struct OverlayView: View {
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(Theme.accent)
             
-            // Title
-            Text("PIXEL BOT")
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundColor(Theme.gold)
-            
-            Text("v2")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(Theme.textDim)
+            // Title with preset name
+            if let preset = bot.presets.first(where: { $0.id == bot.activePresetId }) {
+                Text("PIXEL")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.gold)
+                Text("-")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.textDim)
+                Text(preset.name.uppercased())
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.accent)
+                    .lineLimit(1)
+            } else {
+                Text("PIXEL BOT")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.gold)
+            }
             
             Spacer()
             
@@ -102,6 +113,13 @@ struct OverlayView: View {
                     isSelected: currentTab == "config"
                 ) {
                     currentTab = "config"
+                }
+                
+                TabButton(
+                    title: "[⚙️ PRESETS]",
+                    isSelected: currentTab == "presets"
+                ) {
+                    currentTab = "presets"
                 }
                 
                 Spacer()

@@ -31,6 +31,7 @@ let package = Package(
                 "Views/PixelArtComponents.swift",
                 "Views/StatusView.swift",
                 "Views/ConfigView.swift",
+                "Views/PresetsView.swift",
                 "Views/OverlayView.swift",
                 "Bot/TibiaBot.swift"
             ]

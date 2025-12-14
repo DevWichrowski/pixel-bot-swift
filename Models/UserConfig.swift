@@ -56,6 +56,29 @@ struct SkinnerConfig: Codable {
     var hotkey: String = "["
 }
 
+/// A named preset containing all settings
+struct PresetConfig: Codable, Identifiable {
+    var id: UUID = UUID()
+    var name: String
+    var regions: RegionConfig = RegionConfig()
+    var healer: HealerConfig = HealerConfig()
+    var eater: EaterConfig = EaterConfig()
+    var haste: HasteConfig = HasteConfig()
+    var skinner: SkinnerConfig = SkinnerConfig()
+    
+    /// Create preset from current config
+    static func fromConfig(_ config: UserConfig, name: String) -> PresetConfig {
+        PresetConfig(
+            name: name,
+            regions: config.regions,
+            healer: config.healer,
+            eater: config.eater,
+            haste: config.haste,
+            skinner: config.skinner
+        )
+    }
+}
+
 /// Complete user configuration
 struct UserConfig: Codable {
     var regions: RegionConfig = RegionConfig()
@@ -63,4 +86,35 @@ struct UserConfig: Codable {
     var eater: EaterConfig = EaterConfig()
     var haste: HasteConfig = HasteConfig()
     var skinner: SkinnerConfig = SkinnerConfig()
+    
+    // Presets support
+    var presets: [PresetConfig] = []
+    var activePresetId: UUID?
+    
+    /// Apply preset settings to current config
+    mutating func applyPreset(_ preset: PresetConfig) {
+        regions = preset.regions
+        healer = preset.healer
+        eater = preset.eater
+        haste = preset.haste
+        skinner = preset.skinner
+        activePresetId = preset.id
+    }
+    
+    /// Update preset with current settings
+    mutating func updatePreset(id: UUID) {
+        guard let index = presets.firstIndex(where: { $0.id == id }) else { return }
+        presets[index].regions = regions
+        presets[index].healer = healer
+        presets[index].eater = eater
+        presets[index].haste = haste
+        presets[index].skinner = skinner
+    }
+    
+    /// Get active preset
+    var activePreset: PresetConfig? {
+        guard let id = activePresetId else { return nil }
+        return presets.first { $0.id == id }
+    }
 }
+

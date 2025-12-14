@@ -110,21 +110,13 @@ class AutoHealer {
     func checkNormalHealOnly(currentHP: Int) -> Bool {
         autoDetectMaxHP(currentHP)
         
-        guard let max = maxHP else { 
-            print("🟡 checkNormalHealOnly: No maxHP set")
-            return false 
-        }
-        guard !isOnCooldown else { 
-            print("🟡 checkNormalHealOnly: On cooldown")
-            return false 
-        }
+        guard maxHP != nil else { return false }
+        guard !isOnCooldown else { return false }
         
         let hpPercent = getHPPercent(currentHP)
-        print("🟡 checkNormalHealOnly: HP=\(currentHP)/\(max) (\(String(format: "%.1f", hpPercent))%) | Threshold=\(heal.threshold)%")
         
         // Only normal heal - critical is handled separately
         if heal.enabled && hpPercent < Double(heal.threshold) {
-            print("🟡 NORMAL HEAL TRIGGERED: F1")
             castHeal(heal)
             return true
         }
@@ -167,19 +159,13 @@ class AutoHealer {
         autoDetectMaxHP(currentHP)
         autoDetectMaxMana(currentMana)
         
-        guard !isOnCooldown else { 
-            print("🔴 checkCriticalAndManaWithPriority: On cooldown")
-            return (nil, false) 
-        }
+        guard !isOnCooldown else { return (nil, false) }
         
         let hpPercent = maxHP != nil ? getHPPercent(currentHP) : 100.0
         let manaPercent = maxMana != nil ? getManaPercent(currentMana) : 100.0
         
-        print("🔴 checkCriticalAndManaWithPriority: HP=\(String(format: "%.1f", hpPercent))% (crit threshold=\(criticalHeal.threshold)%) | Mana=\(String(format: "%.1f", manaPercent))% (threshold=\(manaRestore.threshold)%)")
-        
         // Priority 1: Critical heal (life-saving)
         if criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold) {
-            print("🔴 CRITICAL HEAL TRIGGERED: F2")
             castHeal(criticalHeal)
             return ("critical", false)
         }
@@ -188,7 +174,6 @@ class AutoHealer {
         if manaRestore.enabled && manaPercent < Double(manaRestore.threshold) {
             keyPress.pressKey(manaRestore.hotkey)
             lastCastTime = Date()
-            print("🔵 Mana restore: \(manaRestore.hotkey) (threshold: \(manaRestore.threshold)%)")
             return (nil, true)
         }
         

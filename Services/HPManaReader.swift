@@ -43,7 +43,7 @@ class HPManaReader {
         var reading = StatusReading()
         
         debugCounter += 1
-        let shouldDebug = debugMode // Debug every read to diagnose OCR issues
+        let shouldDebug = debugMode && debugCounter % 20 == 1 // Debug every 20 reads (2 seconds)
         
         // Read HP
         if let region = hpRegion {
