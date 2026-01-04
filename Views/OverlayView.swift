@@ -6,31 +6,34 @@ struct OverlayView: View {
     @StateObject private var bot = TibiaBot()
     @State private var currentTab = "status"
     @State private var dragOffset = CGPoint.zero
+    @State private var isCollapsed = false
     
     var body: some View {
         VStack(spacing: 0) {
             // Header
             headerView
             
-            // Tabs
-            tabsView
-            
-            // Content
-            Group {
-                switch currentTab {
-                case "status":
-                    StatusView(bot: bot)
-                case "config":
-                    ConfigView(bot: bot)
-                case "presets":
-                    PresetsView(bot: bot)
-                default:
-                    StatusView(bot: bot)
+            if !isCollapsed {
+                // Tabs
+                tabsView
+                
+                // Content
+                Group {
+                    switch currentTab {
+                    case "status":
+                        StatusView(bot: bot)
+                    case "config":
+                        ConfigView(bot: bot)
+                    case "presets":
+                        PresetsView(bot: bot)
+                    default:
+                        StatusView(bot: bot)
+                    }
                 }
+                .frame(maxHeight: .infinity)
             }
-            .frame(maxHeight: .infinity)
         }
-        .frame(width: 280, height: 550)
+        .frame(width: 280, height: isCollapsed ? 32 : 550)
         .background(Theme.bg)
         .overlay(
             RoundedRectangle(cornerRadius: 4)
@@ -43,33 +46,59 @@ struct OverlayView: View {
                     lineWidth: 4
                 )
         )
+        .animation(.easeInOut(duration: 0.2), value: isCollapsed)
     }
     
     // MARK: - Header
     
     private var headerView: some View {
         HStack {
+            // Collapse/Expand button
+            Button(action: {
+                isCollapsed.toggle()
+            }) {
+                Text(isCollapsed ? "[+]" : "[-]")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.accent)
+            }
+            .buttonStyle(.plain)
+            
             // Decoration
             Text("◆◇◆")
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(Theme.accent)
             
-            // Title with preset name
-            if let preset = bot.presets.first(where: { $0.id == bot.activePresetId }) {
-                Text("PIXEL")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(Theme.gold)
-                Text("-")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(Theme.textDim)
-                Text(preset.name.uppercased())
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundColor(Theme.accent)
-                    .lineLimit(1)
-            } else {
-                Text("PIXEL BOT")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(Theme.gold)
+            // Title with preset name (only when expanded)
+            if !isCollapsed {
+                if let preset = bot.presets.first(where: { $0.id == bot.activePresetId }) {
+                    Text("PIXEL")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(Theme.gold)
+                    Text("-")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(Theme.textDim)
+                    Text(preset.name.uppercased())
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(Theme.accent)
+                        .lineLimit(1)
+                } else {
+                    Text("PIXEL BOT")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(Theme.gold)
+                }
+            }
+            
+            // Status indicator (always visible, more prominent when collapsed)
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(bot.isRunning ? Theme.success : Theme.textDim)
+                    .frame(width: 8, height: 8)
+                
+                if isCollapsed {
+                    Text(bot.isRunning ? "RUNNING" : "STOPPED")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(bot.isRunning ? Theme.success : Theme.textDim)
+                }
             }
             
             Spacer()
@@ -83,9 +112,6 @@ struct OverlayView: View {
                     .foregroundColor(Theme.textDim)
             }
             .buttonStyle(.plain)
-            .onHover { hovering in
-                // Could add hover effect here
-            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
