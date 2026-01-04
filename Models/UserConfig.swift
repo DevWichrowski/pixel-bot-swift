@@ -56,6 +56,15 @@ struct SkinnerConfig: Codable {
     var hotkey: String = "["
 }
 
+/// Combo configuration - simple timer-based combo
+struct ComboConfig: Codable {
+    var enabled: Bool = false
+    var startStopHotkey: String = "v"
+    var comboHotkey: String = "2"
+    var lootOnStop: Bool = true  // Press auto loot when combo stops
+    var autoLootHotkey: String = "space"
+}
+
 /// A named preset containing all settings
 struct PresetConfig: Codable, Identifiable {
     var id: UUID = UUID()
@@ -65,6 +74,7 @@ struct PresetConfig: Codable, Identifiable {
     var eater: EaterConfig = EaterConfig()
     var haste: HasteConfig = HasteConfig()
     var skinner: SkinnerConfig = SkinnerConfig()
+    var combo: ComboConfig = ComboConfig()
     
     /// Create preset from current config
     static func fromConfig(_ config: UserConfig, name: String) -> PresetConfig {
@@ -74,7 +84,8 @@ struct PresetConfig: Codable, Identifiable {
             healer: config.healer,
             eater: config.eater,
             haste: config.haste,
-            skinner: config.skinner
+            skinner: config.skinner,
+            combo: config.combo
         )
     }
 }
@@ -86,6 +97,7 @@ struct UserConfig: Codable {
     var eater: EaterConfig = EaterConfig()
     var haste: HasteConfig = HasteConfig()
     var skinner: SkinnerConfig = SkinnerConfig()
+    var combo: ComboConfig = ComboConfig()
     
     // Presets support
     var presets: [PresetConfig] = []
@@ -98,6 +110,7 @@ struct UserConfig: Codable {
         eater = preset.eater
         haste = preset.haste
         skinner = preset.skinner
+        combo = preset.combo
         activePresetId = preset.id
     }
     
@@ -109,6 +122,7 @@ struct UserConfig: Codable {
         presets[index].eater = eater
         presets[index].haste = haste
         presets[index].skinner = skinner
+        presets[index].combo = combo
     }
     
     /// Get active preset

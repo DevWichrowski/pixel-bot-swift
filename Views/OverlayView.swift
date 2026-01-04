@@ -94,10 +94,22 @@ struct OverlayView: View {
                     .fill(bot.isRunning ? Theme.success : Theme.textDim)
                     .frame(width: 8, height: 8)
                 
+                // Combo active indicator
+                if bot.comboIsActive {
+                    Text("⚔️")
+                        .font(.system(size: 12))
+                }
+                
                 if isCollapsed {
                     Text(bot.isRunning ? "RUNNING" : "STOPPED")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundColor(bot.isRunning ? Theme.success : Theme.textDim)
+                    
+                    if bot.comboIsActive {
+                        Text("COMBO")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundColor(Theme.warning)
+                    }
                 }
             }
             

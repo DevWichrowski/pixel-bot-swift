@@ -248,3 +248,120 @@ struct ThresholdRow: View {
         }
     }
 }
+
+// MARK: - Key Capture Field (for hotkeys including F1-F12)
+
+struct KeyCaptureField: View {
+    @Binding var key: String
+    @State private var isCapturing = false
+    
+    var body: some View {
+        Button(action: {
+            isCapturing = true
+        }) {
+            Text(key.isEmpty ? "..." : key.uppercased())
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundColor(isCapturing ? Theme.accent : Theme.textBright)
+                .frame(width: 50, height: 20)
+                .background(isCapturing ? Theme.bgLight : Theme.bgDark)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(isCapturing ? Theme.accent : Theme.borderMid, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .background(
+            KeyCaptureView(isCapturing: $isCapturing, capturedKey: $key)
+        )
+    }
+}
+
+struct KeyCaptureView: NSViewRepresentable {
+    @Binding var isCapturing: Bool
+    @Binding var capturedKey: String
+    
+    func makeNSView(context: Context) -> KeyCaptureNSView {
+        let view = KeyCaptureNSView()
+        view.onKeyCapture = { keyName in
+            capturedKey = keyName
+            isCapturing = false
+        }
+        return view
+    }
+    
+    func updateNSView(_ nsView: KeyCaptureNSView, context: Context) {
+        nsView.isCapturing = isCapturing
+        if isCapturing {
+            DispatchQueue.main.async {
+                nsView.window?.makeFirstResponder(nsView)
+            }
+        }
+    }
+}
+
+class KeyCaptureNSView: NSView {
+    var isCapturing = false
+    var onKeyCapture: ((String) -> Void)?
+    
+    override var acceptsFirstResponder: Bool { true }
+    
+    override func keyDown(with event: NSEvent) {
+        guard isCapturing else {
+            super.keyDown(with: event)
+            return
+        }
+        
+        let keyName = keyCodeToName(event.keyCode)
+        if !keyName.isEmpty {
+            onKeyCapture?(keyName)
+        }
+    }
+    
+    private func keyCodeToName(_ keyCode: UInt16) -> String {
+        let keyMap: [UInt16: String] = [
+            // Letters
+            0: "a", 1: "s", 2: "d", 3: "f", 4: "h", 5: "g", 6: "z", 7: "x",
+            8: "c", 9: "v", 11: "b", 12: "q", 13: "w", 14: "e", 15: "r",
+            16: "y", 17: "t", 31: "o", 32: "u", 34: "i", 35: "p", 37: "l",
+            38: "j", 40: "k", 45: "n", 46: "m",
+            
+            // Numbers
+            18: "1", 19: "2", 20: "3", 21: "4", 22: "6", 23: "5",
+            25: "9", 26: "7", 28: "8", 29: "0",
+            
+            // Symbols
+            24: "=", 27: "-", 30: "]", 33: "[", 39: "'", 41: ";",
+            42: "\\", 43: ",", 44: "/", 47: ".", 50: "`",
+            
+            // Special keys
+            36: "return", 48: "tab", 49: "space", 51: "delete",
+            53: "escape",
+            
+            // Function keys
+            122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5",
+            97: "F6", 98: "F7", 100: "F8", 101: "F9", 109: "F10",
+            103: "F11", 111: "F12"
+        ]
+        return keyMap[keyCode] ?? ""
+    }
+}
+
+// MARK: - Hotkey Row with Key Capture
+
+struct HotkeyRow: View {
+    let label: String
+    @Binding var hotkey: String
+    
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(Theme.text)
+            
+            Spacer()
+            
+            KeyCaptureField(key: $hotkey)
+        }
+    }
+}
+

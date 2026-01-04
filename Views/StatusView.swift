@@ -114,6 +114,14 @@ struct StatusView: View {
                             isOn: $bot.skinnerEnabled,
                             hotkey: bot.skinnerHotkey
                         )
+                        
+                        ToggleRow(
+                            label: "Combo",
+                            icon: "⚔",
+                            color: Theme.warning,
+                            isOn: $bot.comboEnabled,
+                            hotkey: bot.comboHotkey
+                        )
                     }
                 }
                 

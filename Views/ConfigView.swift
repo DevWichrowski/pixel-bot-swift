@@ -118,6 +118,27 @@ struct ConfigView: View {
                     }
                 }
                 
+                // Auto Combo Section
+                SectionHeader(title: "AUTO COMBO", icon: "⚔")
+                
+                PixelArtPanel {
+                    VStack(spacing: 4) {
+                        HotkeyRow(label: "⚔ Start/Stop:", hotkey: $bot.comboStartStopHotkey)
+                        HotkeyRow(label: "⚔ Combo Key:", hotkey: $bot.comboHotkey)
+                        
+                        Divider().background(Theme.textDim)
+                        
+                        ToggleRow(
+                            label: "Loot on Stop",
+                            icon: "📦",
+                            color: Theme.success,
+                            isOn: $bot.lootOnStop
+                        )
+                        
+                        HotkeyRow(label: "📦 Loot Key:", hotkey: $bot.autoLootHotkey)
+                    }
+                }
+                
                 // Reset Button
                 HStack {
                     Spacer()
@@ -131,28 +152,6 @@ struct ConfigView: View {
                 .padding(.top, 8)
             }
             .padding(4)
-        }
-    }
-}
-
-struct HotkeyRow: View {
-    let label: String
-    @Binding var hotkey: String
-    
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(Theme.text)
-            
-            Spacer()
-            
-            TextField("", text: $hotkey)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(Theme.textBright)
-                .frame(width: 50, height: 20)
-                .textFieldStyle(.roundedBorder)
-                .multilineTextAlignment(.center)
         }
     }
 }

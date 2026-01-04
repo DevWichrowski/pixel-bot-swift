@@ -39,6 +39,14 @@ class TibiaBot: ObservableObject {
     @Published var skinnerEnabled = false { didSet { skinner.toggle(skinnerEnabled); saveConfig() } }
     @Published var skinnerHotkey = "[" { didSet { skinner.hotkey = skinnerHotkey; saveConfig() } }
     
+    // Combo settings
+    @Published var comboEnabled = false { didSet { combo.toggle(comboEnabled); saveConfig() } }
+    @Published var comboIsActive = false
+    @Published var comboStartStopHotkey = "v" { didSet { combo.startStopHotkey = comboStartStopHotkey; saveConfig() } }
+    @Published var comboHotkey = "2" { didSet { combo.comboHotkey = comboHotkey; saveConfig() } }
+    @Published var lootOnStop = true { didSet { combo.lootOnStop = lootOnStop; saveConfig() } }
+    @Published var autoLootHotkey = "space" { didSet { combo.autoLootHotkey = autoLootHotkey; saveConfig() } }
+    
     // Region status
     @Published var hpRegionStatus = "✗ Not set"
     @Published var manaRegionStatus = "✗ Not set"
@@ -54,6 +62,7 @@ class TibiaBot: ObservableObject {
     let eater = AutoEater()
     let haste = AutoHaste()
     let skinner = AutoSkinner()
+    let combo = AutoCombo()
     
     private var loopTimer: Timer?
     private let refreshRate: TimeInterval = 0.1  // 100ms
@@ -63,6 +72,11 @@ class TibiaBot: ObservableObject {
     init() {
         loadConfig()
         skinner.start()  // Start mouse listener
+        
+        // Setup combo callback
+        combo.onActiveChanged = { [weak self] isActive in
+            DispatchQueue.main.async { self?.comboIsActive = isActive }
+        }
         
         // Check permissions
         if !screenCapture.checkPermission() {
@@ -130,6 +144,17 @@ class TibiaBot: ObservableObject {
         haste.hotkey = hasteHotkey
         
         skinner.hotkey = skinnerHotkey
+        
+        // Combo
+        comboEnabled = config.combo.enabled
+        comboStartStopHotkey = config.combo.startStopHotkey
+        comboHotkey = config.combo.comboHotkey
+        lootOnStop = config.combo.lootOnStop
+        autoLootHotkey = config.combo.autoLootHotkey
+        combo.comboHotkey = comboHotkey
+        combo.startStopHotkey = comboStartStopHotkey
+        combo.lootOnStop = lootOnStop
+        combo.autoLootHotkey = autoLootHotkey
     }
     
     private func saveConfig() {
@@ -157,6 +182,12 @@ class TibiaBot: ObservableObject {
         
         config.skinner.enabled = skinnerEnabled
         config.skinner.hotkey = skinnerHotkey
+        
+        config.combo.enabled = comboEnabled
+        config.combo.startStopHotkey = comboStartStopHotkey
+        config.combo.comboHotkey = comboHotkey
+        config.combo.lootOnStop = lootOnStop
+        config.combo.autoLootHotkey = autoLootHotkey
         
         configManager.config = config
         configManager.save()
@@ -350,5 +381,8 @@ class TibiaBot: ObservableObject {
         // Process other features
         eater.checkAndEat()
         haste.checkAndCast()
+        
+        // Process combo (simple timer-based)
+        combo.checkAndPress()
     }
 }

@@ -28,6 +28,7 @@ let package = Package(
                 "Features/AutoEater.swift",
                 "Features/AutoHaste.swift",
                 "Features/AutoSkinner.swift",
+                "Features/AutoCombo.swift",
                 "Views/PixelArtComponents.swift",
                 "Views/StatusView.swift",
                 "Views/ConfigView.swift",
