@@ -31,6 +31,11 @@ struct ComboConfig {
     var comboHotkey: String = "2"
     var lootOnStop: Bool = true
     var autoLootHotkey: String = "space"
+    
+    // Utito Tempo settings
+    var utitoTempoHotkey: String = "F9"
+    var utitoTempoEnabled: Bool = false
+    var recastUtito: Bool = false
 }
 
 // ============================================
@@ -50,6 +55,11 @@ class TestAutoCombo {
     var lootOnStop: Bool = true
     var autoLootHotkey: String = "space"
     
+    /// Utito Tempo settings
+    var utitoTempoHotkey: String = "F9"
+    var utitoTempoEnabled: Bool = false
+    var recastUtito: Bool = false
+    
     /// Is combo active
     var isActive: Bool = false
     
@@ -61,6 +71,11 @@ class TestAutoCombo {
     private let comboIntervalMax: TimeInterval = 2.1
     private var nextInterval: TimeInterval = 2.0
     private var lastPressTime: Date = .distantPast
+    
+    /// Utito Tempo timing
+    private var lastUtitoTime: Date = .distantPast
+    private let utitoDuration: TimeInterval = 10.0
+    private let utitoCooldown: TimeInterval = 2.0
     
     /// Track loot presses
     var lootPressed: Bool = false
@@ -88,8 +103,19 @@ class TestAutoCombo {
         isActive = !isActive
         
         if isActive {
-            lastPressTime = .distantPast
             randomizeInterval()
+            
+            // Use Utito Tempo if enabled
+            if utitoTempoEnabled {
+                keyPress.pressKey(utitoTempoHotkey)
+                lastUtitoTime = Date()
+                
+                // Start combo 0.2-0.3s after Utito Tempo
+                let delay = Double.random(in: 0.2...0.3)
+                lastPressTime = Date().addingTimeInterval(-nextInterval + delay)
+            } else {
+                lastPressTime = .distantPast
+            }
         } else {
             // Press auto loot after stopping (if enabled)
             if wasActive && lootOnStop {
@@ -102,8 +128,16 @@ class TestAutoCombo {
     func start() {
         guard enabled else { return }
         isActive = true
-        lastPressTime = .distantPast
         randomizeInterval()
+        
+        if utitoTempoEnabled {
+            keyPress.pressKey(utitoTempoHotkey)
+            lastUtitoTime = Date()
+            let delay = Double.random(in: 0.2...0.3)
+            lastPressTime = Date().addingTimeInterval(-nextInterval + delay)
+        } else {
+            lastPressTime = .distantPast
+        }
     }
     
     func stop() {
@@ -120,6 +154,16 @@ class TestAutoCombo {
         guard enabled && isActive else { return }
         
         let now = Date()
+        
+        // Re-cast Utito Tempo every 10 seconds if enabled
+        if recastUtito && utitoTempoEnabled {
+            if now.timeIntervalSince(lastUtitoTime) >= utitoDuration {
+                keyPress.pressKey(utitoTempoHotkey)
+                lastUtitoTime = now
+            }
+        }
+        
+        // Press combo key at regular interval
         if now.timeIntervalSince(lastPressTime) >= nextInterval {
             keyPress.pressKey(comboHotkey)
             lastPressTime = now
@@ -129,7 +173,9 @@ class TestAutoCombo {
     
     /// Reset for testing
     func resetForTest() {
+        isActive = false
         lastPressTime = .distantPast
+        lastUtitoTime = .distantPast
         lootPressed = false
     }
 }
@@ -337,6 +383,129 @@ func runTests() {
     test("Interval randomization exists (verified by code review)", true)
     
     // ============================================
+    // TEST 13: Utito Tempo disabled - should not press
+    // ============================================
+    print("\n--- TEST 13: Utito Tempo disabled ---")
+    keyPress.reset()
+    combo.resetForTest()
+    combo.enabled = true
+    combo.utitoTempoEnabled = false
+    combo.comboHotkey = "2"
+    
+    combo.toggleActive()  // Start combo
+    
+    test("Utito disabled should not press F9", !keyPress.pressedKeys.contains("F9"))
+    test("Combo should still activate", combo.isActive == true)
+    
+    // ============================================
+    // TEST 14: Utito Tempo enabled - should press F9 first
+    // ============================================
+    print("\n--- TEST 14: Utito Tempo enabled ---")
+    keyPress.reset()
+    combo.resetForTest()
+    combo.enabled = true
+    combo.utitoTempoEnabled = true
+    combo.utitoTempoHotkey = "F9"
+    combo.comboHotkey = "2"
+    
+    combo.toggleActive()  // Start combo
+    
+    test("Utito enabled should press F9", keyPress.pressedKeys.contains("F9"))
+    test("F9 should be first key pressed", keyPress.pressedKeys.first == "F9")
+    
+    // ============================================
+    // TEST 15: Utito delay - combo should wait 0.2-0.3s
+    // ============================================
+    print("\n--- TEST 15: Utito Tempo delay before combo ---")
+    keyPress.reset()
+    combo.resetForTest()
+    combo.enabled = true
+    combo.utitoTempoEnabled = true
+    combo.utitoTempoHotkey = "F9"
+    combo.comboHotkey = "2"
+    
+    combo.start()  // Start with Utito
+    
+    // Immediately check - combo should NOT press yet (delay 0.2-0.3s)
+    combo.checkAndPress()
+    
+    let f9Pressed = keyPress.pressedKeys.contains("F9")
+    let comboCount = keyPress.pressedKeys.filter { $0 == "2" }.count
+    
+    test("Utito F9 should be pressed on start", f9Pressed)
+    test("Combo should not press immediately (0.2-0.3s delay)", comboCount == 0)
+    
+    // Wait for delay
+    Thread.sleep(forTimeInterval: 0.4)
+    combo.checkAndPress()
+    
+    let comboAfterDelay = keyPress.pressedKeys.filter { $0 == "2" }.count
+    test("After delay, combo should press", comboAfterDelay >= 1)
+    
+    // ============================================
+    // TEST 16: Re-cast Utito every 10 seconds
+    // ============================================
+    print("\n--- TEST 16: Re-cast Utito enabled ---")
+    keyPress.reset()
+    combo.resetForTest()
+    combo.enabled = true
+    combo.utitoTempoEnabled = true
+    combo.recastUtito = true
+    combo.utitoTempoHotkey = "F9"
+    
+    combo.start()  // First Utito press
+    keyPress.reset()  // Clear initial press
+    
+    // Simulate 11 seconds passing
+    let startTime = Date()
+    while Date().timeIntervalSince(startTime) < 11.0 {
+        combo.checkAndPress()
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+    
+    let utitoCount = keyPress.pressedKeys.filter { $0 == "F9" }.count
+    test("Re-cast enabled should press Utito at least once in 11s", utitoCount >= 1)
+    
+    // ============================================
+    // TEST 17: Re-cast disabled - should only cast once
+    // ============================================
+    print("\n--- TEST 17: Re-cast Utito disabled ---")
+    keyPress.reset()
+    combo.resetForTest()
+    combo.enabled = true
+    combo.utitoTempoEnabled = true
+    combo.recastUtito = false  // Re-cast OFF
+    combo.utitoTempoHotkey = "F9"
+    
+    combo.start()  // First Utito press
+    keyPress.reset()
+    
+    // Simulate 11 seconds
+    let startTime2 = Date()
+    while Date().timeIntervalSince(startTime2) < 11.0 {
+        combo.checkAndPress()
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+    
+    let utitoCount2 = keyPress.pressedKeys.filter { $0 == "F9" }.count
+    test("Re-cast disabled should NOT press Utito again", utitoCount2 == 0)
+    
+    // ============================================
+    // TEST 18: Custom Utito hotkey
+    // ============================================
+    print("\n--- TEST 18: Custom Utito hotkey ---")
+    keyPress.reset()
+    combo.resetForTest()
+    combo.enabled = true
+    combo.utitoTempoEnabled = true
+    combo.utitoTempoHotkey = "F5"  // Custom
+    
+    combo.start()
+    
+    test("Custom Utito hotkey F5 should be pressed", keyPress.pressedKeys.contains("F5"))
+    test("Default F9 should NOT be pressed", !keyPress.pressedKeys.contains("F9"))
+    
+    // ============================================
     // SUMMARY
     // ============================================
     print("\n" + String(repeating: "=", count: 60))
@@ -352,3 +521,9 @@ func runTests() {
 
 // Run the tests
 runTests()
+
+
+// Moved to end - will paste before SUMMARY
+func addUtitoTests() {
+    // This is a placeholder - tests will be added directly in file
+}
