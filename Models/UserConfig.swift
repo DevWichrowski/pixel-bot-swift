@@ -35,6 +35,10 @@ struct HealerConfig: Codable {
     var manaEnabled: Bool = true
     var manaThreshold: Int = 60
     var manaHotkey: String = "F4"
+    
+    // Cooldown settings
+    var spellCooldown: Double = 0.5    // Cooldown for heal spells (normal + critical when not potion)
+    var potionCooldown: Double = 0.5   // Cooldown for potions (mana + critical when is potion)
 }
 
 /// Eater configuration

@@ -2,8 +2,9 @@ import Foundation
 
 /// Auto healer managing normal heal, critical heal, and mana restoration
 class AutoHealer {
-    /// Global cooldown between any spell (1 second)
-    static let COOLDOWN: TimeInterval = 1.0
+    /// Configurable cooldowns
+    var spellCooldown: TimeInterval = 0.5   // For heal spells (normal + critical when not potion)
+    var potionCooldown: TimeInterval = 0.5  // For potions (mana + critical when is potion)
     
     private let keyPress: KeyPressService
     
@@ -19,8 +20,9 @@ class AutoHealer {
     /// Critical heal is a potion mode - shares cooldown with mana, has priority
     var criticalIsPotion: Bool = false
     
-    /// Cooldown tracking
-    private var lastCastTime: Date = .distantPast
+    /// Separate cooldown tracking
+    private var lastSpellCastTime: Date = .distantPast   // For normal + critical (non-potion mode)
+    private var lastPotionCastTime: Date = .distantPast  // For mana + critical (potion mode)
     
     init(keyPress: KeyPressService = .shared) {
         self.keyPress = keyPress
@@ -66,38 +68,39 @@ class AutoHealer {
         return (Double(currentMana) / Double(max)) * 100.0
     }
     
-    // MARK: - Cooldown
+    // MARK: - Cooldown Checks
     
-    var isOnCooldown: Bool {
-        Date().timeIntervalSince(lastCastTime) < Self.COOLDOWN
+    var isSpellOnCooldown: Bool {
+        Date().timeIntervalSince(lastSpellCastTime) < spellCooldown
     }
     
-    var cooldownRemaining: TimeInterval {
-        max(0, Self.COOLDOWN - Date().timeIntervalSince(lastCastTime))
+    var isPotionOnCooldown: Bool {
+        Date().timeIntervalSince(lastPotionCastTime) < potionCooldown
     }
     
     // MARK: - Healing
     
-    /// Check if healing is needed and cast if possible
+    /// Check if healing is needed and cast if possible (standard mode - criticalIsPotion = false)
+    /// Both normal and critical heal use spell cooldown
     /// Returns: "critical", "normal", or nil
     @discardableResult
     func checkAndHeal(currentHP: Int) -> String? {
         autoDetectMaxHP(currentHP)
         
         guard maxHP != nil else { return nil }
-        guard !isOnCooldown else { return nil }
+        guard !isSpellOnCooldown else { return nil }
         
         let hpPercent = getHPPercent(currentHP)
         
         // Critical heal has priority
         if criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold) {
-            castHeal(criticalHeal)
+            castSpell(criticalHeal)
             return "critical"
         }
         
         // Normal heal
         if heal.enabled && hpPercent < Double(heal.threshold) {
-            castHeal(heal)
+            castSpell(heal)
             return "normal"
         }
         
@@ -106,44 +109,51 @@ class AutoHealer {
     
     /// Check only normal heal (skip critical) - used when criticalIsPotion mode is enabled
     /// In that mode, critical heal is handled by checkCriticalAndManaWithPriority
+    /// Uses spell cooldown
     @discardableResult
     func checkNormalHealOnly(currentHP: Int) -> Bool {
         autoDetectMaxHP(currentHP)
         
         guard maxHP != nil else { return false }
-        guard !isOnCooldown else { return false }
+        guard !isSpellOnCooldown else { return false }
         
         let hpPercent = getHPPercent(currentHP)
         
-        // Only normal heal - critical is handled separately
+        // Only normal heal - critical is handled separately (potion)
         if heal.enabled && hpPercent < Double(heal.threshold) {
-            castHeal(heal)
+            castSpell(heal)
             return true
         }
         
         return false
     }
     
-    private func castHeal(_ config: HealConfig) {
+    /// Cast a spell (uses spell cooldown)
+    private func castSpell(_ config: HealConfig) {
         keyPress.pressKey(config.hotkey)
-        lastCastTime = Date()
+        lastSpellCastTime = Date()
+    }
+    
+    /// Use a potion (uses potion cooldown)
+    private func usePotion(_ hotkey: String) {
+        keyPress.pressKey(hotkey)
+        lastPotionCastTime = Date()
     }
     
     // MARK: - Mana Restoration
     
-    /// Check if mana restore is needed
+    /// Check if mana restore is needed (uses potion cooldown)
     @discardableResult
     func checkAndRestoreMana(currentMana: Int) -> Bool {
         autoDetectMaxMana(currentMana)
         
         guard maxMana != nil else { return false }
-        guard !isOnCooldown else { return false }
+        guard !isPotionOnCooldown else { return false }
         
         let manaPercent = getManaPercent(currentMana)
         
         if manaRestore.enabled && manaPercent < Double(manaRestore.threshold) {
-            keyPress.pressKey(manaRestore.hotkey)
-            lastCastTime = Date()
+            usePotion(manaRestore.hotkey)
             print("🔷 Mana restore: \(manaRestore.hotkey) (threshold: \(manaRestore.threshold)%)")
             return true
         }
@@ -154,26 +164,25 @@ class AutoHealer {
     // MARK: - Critical Is Potion Mode
     
     /// Check both critical heal and mana with critical priority
-    /// Used when criticalIsPotion is true
+    /// Used when criticalIsPotion is true - both use potion cooldown
     func checkCriticalAndManaWithPriority(currentHP: Int, currentMana: Int) -> (healType: String?, manaRestored: Bool) {
         autoDetectMaxHP(currentHP)
         autoDetectMaxMana(currentMana)
         
-        guard !isOnCooldown else { return (nil, false) }
+        guard !isPotionOnCooldown else { return (nil, false) }
         
         let hpPercent = maxHP != nil ? getHPPercent(currentHP) : 100.0
         let manaPercent = maxMana != nil ? getManaPercent(currentMana) : 100.0
         
-        // Priority 1: Critical heal (life-saving)
+        // Priority 1: Critical heal (life-saving) - uses potion
         if criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold) {
-            castHeal(criticalHeal)
+            usePotion(criticalHeal.hotkey)
             return ("critical", false)
         }
         
-        // Priority 2: Mana restore
+        // Priority 2: Mana restore - uses potion
         if manaRestore.enabled && manaPercent < Double(manaRestore.threshold) {
-            keyPress.pressKey(manaRestore.hotkey)
-            lastCastTime = Date()
+            usePotion(manaRestore.hotkey)
             return (nil, true)
         }
         

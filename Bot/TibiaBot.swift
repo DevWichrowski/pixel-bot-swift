@@ -26,6 +26,10 @@ class TibiaBot: ObservableObject {
     @Published var criticalHotkey = "F2" { didSet { healer.criticalHeal.hotkey = criticalHotkey; saveConfig() } }
     @Published var manaHotkey = "F4" { didSet { healer.manaRestore.hotkey = manaHotkey; saveConfig() } }
     
+    // Cooldown settings
+    @Published var spellCooldown = "0.5" { didSet { healer.spellCooldown = Double(spellCooldown) ?? 0.5; saveConfig() } }
+    @Published var potionCooldown = "0.5" { didSet { healer.potionCooldown = Double(potionCooldown) ?? 0.5; saveConfig() } }
+    
     // Eater settings
     @Published var eaterEnabled = false { didSet { eater.toggle(eaterEnabled); saveConfig() } }
     @Published var foodType = "fire_mushroom" { didSet { eater.setFoodType(foodType); saveConfig() } }
@@ -113,6 +117,10 @@ class TibiaBot: ObservableObject {
         manaThreshold = String(config.healer.manaThreshold)
         manaHotkey = config.healer.manaHotkey
         
+        // Cooldowns
+        spellCooldown = String(config.healer.spellCooldown)
+        potionCooldown = String(config.healer.potionCooldown)
+        
         // Eater
         eaterEnabled = config.eater.enabled
         foodType = config.eater.foodType
@@ -142,6 +150,8 @@ class TibiaBot: ObservableObject {
         healer.criticalHeal = HealConfig(enabled: criticalEnabled, threshold: Int(criticalThreshold) ?? 50, hotkey: criticalHotkey)
         healer.manaRestore = HealConfig(enabled: manaEnabled, threshold: Int(manaThreshold) ?? 60, hotkey: manaHotkey)
         healer.criticalIsPotion = criticalIsPotion
+        healer.spellCooldown = Double(spellCooldown) ?? 0.5
+        healer.potionCooldown = Double(potionCooldown) ?? 0.5
         
         eater.setFoodType(foodType)
         eater.hotkey = eaterHotkey
@@ -183,6 +193,10 @@ class TibiaBot: ObservableObject {
         config.healer.manaEnabled = manaEnabled
         config.healer.manaThreshold = Int(manaThreshold) ?? 60
         config.healer.manaHotkey = manaHotkey
+        
+        // Cooldowns
+        config.healer.spellCooldown = Double(spellCooldown) ?? 0.5
+        config.healer.potionCooldown = Double(potionCooldown) ?? 0.5
         
         config.eater.enabled = eaterEnabled
         config.eater.foodType = foodType

@@ -102,6 +102,45 @@ struct ConfigView: View {
                             .font(.system(size: 9, design: .monospaced))
                             .foregroundColor(Theme.textDim)
                             .padding(.leading, 16)
+                        
+                        Divider().background(Theme.textDim)
+                        
+                        // Cooldown settings
+                        HStack {
+                            Text("⏱ Spell CD:")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(Theme.text)
+                            
+                            Spacer()
+                            
+                            TextField("", text: $bot.spellCooldown)
+                                .font(.system(size: 10, design: .monospaced))
+                                .frame(width: 50, height: 20)
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.center)
+                            
+                            Text("s")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(Theme.textDim)
+                        }
+                        
+                        HStack {
+                            Text("⏱ Potion CD:")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(Theme.text)
+                            
+                            Spacer()
+                            
+                            TextField("", text: $bot.potionCooldown)
+                                .font(.system(size: 10, design: .monospaced))
+                                .frame(width: 50, height: 20)
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.center)
+                            
+                            Text("s")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(Theme.textDim)
+                        }
                     }
                 }
                 
