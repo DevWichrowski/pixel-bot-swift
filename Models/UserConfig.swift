@@ -63,6 +63,11 @@ struct ComboConfig: Codable {
     var comboHotkey: String = "2"
     var lootOnStop: Bool = true  // Press auto loot when combo stops
     var autoLootHotkey: String = "space"
+    
+    // Utito Tempo settings
+    var utitoTempoHotkey: String = "F9"
+    var utitoTempoEnabled: Bool = false  // Use Utito Tempo before combo
+    var recastUtito: Bool = false        // Re-cast Utito every 10 seconds
 }
 
 /// A named preset containing all settings

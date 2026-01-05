@@ -128,6 +128,25 @@ struct ConfigView: View {
                         
                         Divider().background(Theme.textDim)
                         
+                        // Utito Tempo Section
+                        HotkeyRow(label: "⚡ Utito Tempo:", hotkey: $bot.utitoTempoHotkey)
+                        
+                        ToggleRow(
+                            label: "Utito Tempo",
+                            icon: "⚡",
+                            color: Theme.accent,
+                            isOn: $bot.utitoTempoEnabled
+                        )
+                        
+                        ToggleRow(
+                            label: "Re-cast Utito",
+                            icon: "🔄",
+                            color: Theme.warning,
+                            isOn: $bot.recastUtito
+                        )
+                        
+                        Divider().background(Theme.textDim)
+                        
                         ToggleRow(
                             label: "Loot on Stop",
                             icon: "📦",

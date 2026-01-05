@@ -15,6 +15,11 @@ class AutoCombo {
     var lootOnStop: Bool = true
     var autoLootHotkey: String = "space"
     
+    /// Utito Tempo settings
+    var utitoTempoHotkey: String = "F8"
+    var utitoTempoEnabled: Bool = false
+    var recastUtito: Bool = false
+    
     /// Is combo active
     var isActive: Bool = false
     
@@ -26,6 +31,11 @@ class AutoCombo {
     private let comboIntervalMax: TimeInterval = 2.1
     private var nextInterval: TimeInterval = 2.0
     private var lastPressTime: Date = .distantPast
+    
+    /// Utito Tempo timing
+    private var lastUtitoTime: Date = .distantPast
+    private let utitoDuration: TimeInterval = 10.0  // Effect duration
+    private let utitoCooldown: TimeInterval = 2.0   // Cooldown (not used in logic)
     
     /// Keyboard listener
     private var eventTap: CFMachPort?
@@ -156,8 +166,21 @@ class AutoCombo {
         isActive = !isActive
         
         if isActive {
-            lastPressTime = .distantPast
             randomizeInterval()
+            
+            // Use Utito Tempo if enabled
+            if utitoTempoEnabled {
+                keyPress.pressKey(utitoTempoHotkey)
+                lastUtitoTime = Date()
+                print("⚡ Utito Tempo CAST")
+                
+                // Start combo 0.2-0.3s after Utito Tempo
+                let delay = Double.random(in: 0.2...0.3)
+                lastPressTime = Date().addingTimeInterval(-nextInterval + delay)
+            } else {
+                lastPressTime = .distantPast
+            }
+            
             print("⚔️ Combo STARTED")
         } else {
             print("⚔️ Combo STOPPED")
@@ -186,6 +209,17 @@ class AutoCombo {
         guard isActive else { return }
         
         let now = Date()
+        
+        // Re-cast Utito Tempo every 10 seconds if enabled
+        if recastUtito && utitoTempoEnabled {
+            if now.timeIntervalSince(lastUtitoTime) >= utitoDuration {
+                keyPress.pressKey(utitoTempoHotkey)
+                lastUtitoTime = now
+                print("⚡ Utito Tempo RE-CAST")
+            }
+        }
+        
+        // Press combo key at regular interval
         if now.timeIntervalSince(lastPressTime) >= nextInterval {
             keyPress.pressKey(comboHotkey)
             lastPressTime = now

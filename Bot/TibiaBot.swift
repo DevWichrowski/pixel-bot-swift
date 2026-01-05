@@ -47,6 +47,11 @@ class TibiaBot: ObservableObject {
     @Published var lootOnStop = true { didSet { combo.lootOnStop = lootOnStop; saveConfig() } }
     @Published var autoLootHotkey = "space" { didSet { combo.autoLootHotkey = autoLootHotkey; saveConfig() } }
     
+    // Utito Tempo settings
+    @Published var utitoTempoHotkey = "F9" { didSet { combo.utitoTempoHotkey = utitoTempoHotkey; saveConfig() } }
+    @Published var utitoTempoEnabled = false { didSet { combo.utitoTempoEnabled = utitoTempoEnabled; saveConfig() } }
+    @Published var recastUtito = false { didSet { combo.recastUtito = recastUtito; saveConfig() } }
+    
     // Region status
     @Published var hpRegionStatus = "✗ Not set"
     @Published var manaRegionStatus = "✗ Not set"
@@ -151,10 +156,16 @@ class TibiaBot: ObservableObject {
         comboHotkey = config.combo.comboHotkey
         lootOnStop = config.combo.lootOnStop
         autoLootHotkey = config.combo.autoLootHotkey
+        utitoTempoHotkey = config.combo.utitoTempoHotkey
+        utitoTempoEnabled = config.combo.utitoTempoEnabled
+        recastUtito = config.combo.recastUtito
         combo.comboHotkey = comboHotkey
         combo.startStopHotkey = comboStartStopHotkey
         combo.lootOnStop = lootOnStop
         combo.autoLootHotkey = autoLootHotkey
+        combo.utitoTempoHotkey = utitoTempoHotkey
+        combo.utitoTempoEnabled = utitoTempoEnabled
+        combo.recastUtito = recastUtito
     }
     
     private func saveConfig() {
@@ -188,6 +199,9 @@ class TibiaBot: ObservableObject {
         config.combo.comboHotkey = comboHotkey
         config.combo.lootOnStop = lootOnStop
         config.combo.autoLootHotkey = autoLootHotkey
+        config.combo.utitoTempoHotkey = utitoTempoHotkey
+        config.combo.utitoTempoEnabled = utitoTempoEnabled
+        config.combo.recastUtito = recastUtito
         
         configManager.config = config
         configManager.save()
