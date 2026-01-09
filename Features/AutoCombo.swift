@@ -34,8 +34,15 @@ class AutoCombo {
     
     /// Utito Tempo timing
     private var lastUtitoTime: Date = .distantPast
-    private let utitoDuration: TimeInterval = 10.0  // Effect duration
+    private let utitoDurationMin: TimeInterval = 9.0   // Min random duration
+    private let utitoDurationMax: TimeInterval = 12.0  // Max random duration
+    private var currentUtitoDuration: TimeInterval = 10.0  // Current random duration
     private let utitoCooldown: TimeInterval = 2.0   // Cooldown (not used in logic)
+    
+    /// Generate random Utito duration 9-12 seconds
+    private func randomUtitoDuration() -> TimeInterval {
+        return Double.random(in: utitoDurationMin...utitoDurationMax)
+    }
     
     /// Keyboard listener
     private var eventTap: CFMachPort?
@@ -172,7 +179,8 @@ class AutoCombo {
             if utitoTempoEnabled {
                 keyPress.pressKey(utitoTempoHotkey)
                 lastUtitoTime = Date()
-                print("⚡ Utito Tempo CAST")
+                currentUtitoDuration = randomUtitoDuration()
+                print("⚡ Utito Tempo CAST (next recast in \(String(format: "%.1f", currentUtitoDuration))s)")
                 
                 // Start combo 0.2-0.3s after Utito Tempo
                 let delay = Double.random(in: 0.2...0.3)
@@ -210,12 +218,13 @@ class AutoCombo {
         
         let now = Date()
         
-        // Re-cast Utito Tempo every 10 seconds if enabled
+        // Re-cast Utito Tempo with random interval 9-12 seconds if enabled
         if recastUtito && utitoTempoEnabled {
-            if now.timeIntervalSince(lastUtitoTime) >= utitoDuration {
+            if now.timeIntervalSince(lastUtitoTime) >= currentUtitoDuration {
                 keyPress.pressKey(utitoTempoHotkey)
                 lastUtitoTime = now
-                print("⚡ Utito Tempo RE-CAST")
+                currentUtitoDuration = randomUtitoDuration()
+                print("⚡ Utito Tempo RE-CAST (next recast in \(String(format: "%.1f", currentUtitoDuration))s)")
             }
         }
         

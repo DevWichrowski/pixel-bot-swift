@@ -24,6 +24,10 @@ class AutoHealer {
     private var lastSpellCastTime: Date = .distantPast   // For normal + critical (non-potion mode)
     private var lastPotionCastTime: Date = .distantPast  // For mana + critical (potion mode)
     
+    /// Random cooldown tracking - each cast gets a new random cooldown
+    private var currentSpellCooldownTarget: TimeInterval = 0.5
+    private var currentPotionCooldownTarget: TimeInterval = 0.5
+    
     init(keyPress: KeyPressService = .shared) {
         self.keyPress = keyPress
     }
@@ -68,14 +72,30 @@ class AutoHealer {
         return (Double(currentMana) / Double(max)) * 100.0
     }
     
+    // MARK: - Random Cooldown Helpers
+    
+    /// Generate random spell cooldown: base - 0.1 to base + 0.15
+    private func randomSpellCooldown() -> TimeInterval {
+        let minCooldown = max(0.1, spellCooldown - 0.1)
+        let maxCooldown = spellCooldown + 0.15
+        return Double.random(in: minCooldown...maxCooldown)
+    }
+    
+    /// Generate random potion cooldown: base - 0.1 to base + 0.2
+    private func randomPotionCooldown() -> TimeInterval {
+        let minCooldown = max(0.1, potionCooldown - 0.1)
+        let maxCooldown = potionCooldown + 0.2
+        return Double.random(in: minCooldown...maxCooldown)
+    }
+    
     // MARK: - Cooldown Checks
     
     var isSpellOnCooldown: Bool {
-        Date().timeIntervalSince(lastSpellCastTime) < spellCooldown
+        Date().timeIntervalSince(lastSpellCastTime) < currentSpellCooldownTarget
     }
     
     var isPotionOnCooldown: Bool {
-        Date().timeIntervalSince(lastPotionCastTime) < potionCooldown
+        Date().timeIntervalSince(lastPotionCastTime) < currentPotionCooldownTarget
     }
     
     // MARK: - Healing
@@ -128,16 +148,18 @@ class AutoHealer {
         return false
     }
     
-    /// Cast a spell (uses spell cooldown)
+    /// Cast a spell (uses spell cooldown with random variation)
     private func castSpell(_ config: HealConfig) {
         keyPress.pressKey(config.hotkey)
         lastSpellCastTime = Date()
+        currentSpellCooldownTarget = randomSpellCooldown()
     }
     
-    /// Use a potion (uses potion cooldown)
+    /// Use a potion (uses potion cooldown with random variation)
     private func usePotion(_ hotkey: String) {
         keyPress.pressKey(hotkey)
         lastPotionCastTime = Date()
+        currentPotionCooldownTarget = randomPotionCooldown()
     }
     
     // MARK: - Mana Restoration
