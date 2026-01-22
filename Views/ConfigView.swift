@@ -47,6 +47,24 @@ struct ConfigView: View {
                             .font(.system(size: 9, design: .monospaced))
                             .foregroundColor(Theme.textDim)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                        
+                        // Ammo Region (for Paladin Combo)
+                        HStack {
+                            Text("🏹 Ammo Region")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(Theme.success)
+                            
+                            Spacer()
+                            
+                            PixelButton("SELECT", color: Theme.accent) {
+                                bot.selectAmmoRegion()
+                            }
+                        }
+                        
+                        Text(bot.ammoRegionStatus)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(Theme.textDim)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 
@@ -200,6 +218,21 @@ struct ConfigView: View {
                             color: Theme.warning,
                             isOn: $bot.recastUtito
                         )
+                        
+                        Divider().background(Theme.textDim)
+                        
+                        // Paladin Combo Section
+                        ToggleRow(
+                            label: "Paladin Combo",
+                            icon: "🏹",
+                            color: Theme.success,
+                            isOn: $bot.paladinComboEnabled
+                        )
+                        
+                        Text("Trigger on ammo decrease")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(Theme.textDim)
+                            .padding(.leading, 16)
                         
                         Divider().background(Theme.textDim)
                         

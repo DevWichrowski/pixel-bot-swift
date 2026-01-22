@@ -17,8 +17,23 @@ class AutoCombo {
     
     /// Utito Tempo settings
     var utitoTempoHotkey: String = "F8"
-    var utitoTempoEnabled: Bool = false
+    var utitoTempoEnabled: Bool = false {
+        didSet {
+            if utitoTempoEnabled && paladinComboEnabled {
+                paladinComboEnabled = false
+            }
+        }
+    }
     var recastUtito: Bool = false
+    
+    /// Paladin Combo settings (mutually exclusive with Utito Tempo)
+    var paladinComboEnabled: Bool = false {
+        didSet {
+            if paladinComboEnabled && utitoTempoEnabled {
+                utitoTempoEnabled = false
+            }
+        }
+    }
     
     /// Is combo active
     var isActive: Bool = false
@@ -228,11 +243,18 @@ class AutoCombo {
             }
         }
         
-        // Press combo key at regular interval
-        if now.timeIntervalSince(lastPressTime) >= nextInterval {
+        // Press combo key at regular interval (only in standard mode, not Paladin Combo)
+        if !paladinComboEnabled && now.timeIntervalSince(lastPressTime) >= nextInterval {
             keyPress.pressKey(comboHotkey)
             lastPressTime = now
-            randomizeInterval()  // New random interval for next press
+            randomizeInterval()
         }
+    }
+    
+    func checkPaladinCombo(ammoDecreased: Bool) {
+        guard enabled && isActive && paladinComboEnabled && ammoDecreased else { return }
+        
+        keyPress.pressKey(comboHotkey)
+        print("🏹 Paladin Combo triggered (ammo decreased)")
     }
 }

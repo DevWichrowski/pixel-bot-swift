@@ -71,18 +71,39 @@ class TibiaBot: ObservableObject {
     
     // Utito Tempo settings
     @Published var utitoTempoHotkey = "F9" { didSet { combo.utitoTempoHotkey = utitoTempoHotkey; saveConfig() } }
-    @Published var utitoTempoEnabled = false { didSet { combo.utitoTempoEnabled = utitoTempoEnabled; saveConfig() } }
+    @Published var utitoTempoEnabled = false { 
+        didSet { 
+            combo.utitoTempoEnabled = utitoTempoEnabled
+            if utitoTempoEnabled && paladinComboEnabled {
+                paladinComboEnabled = false
+            }
+            saveConfig() 
+        } 
+    }
     @Published var recastUtito = false { didSet { combo.recastUtito = recastUtito; saveConfig() } }
+    
+    // Paladin Combo settings (mutually exclusive with Utito Tempo)
+    @Published var paladinComboEnabled = false { 
+        didSet { 
+            combo.paladinComboEnabled = paladinComboEnabled
+            if paladinComboEnabled && utitoTempoEnabled {
+                utitoTempoEnabled = false
+            }
+            saveConfig() 
+        } 
+    }
     
     // Region status
     @Published var hpRegionStatus = "✗ Not set"
     @Published var manaRegionStatus = "✗ Not set"
+    @Published var ammoRegionStatus = "✗ Not set"
     
     // MARK: - Services and Features
     
     private let configManager = ConfigManager.shared
     private let screenCapture = ScreenCaptureService.shared
     private let reader = HPManaReader()
+    private let ammoReader = AmmoReader()
     private let regionSelector = RegionSelector.shared
     
     let healer = AutoHealer()
@@ -92,6 +113,7 @@ class TibiaBot: ObservableObject {
     let combo = AutoCombo()
     
     private var loopTimer: Timer?
+    
     private let refreshRate: TimeInterval = 0.1  // 100ms
     
     // MARK: - Init
@@ -165,6 +187,11 @@ class TibiaBot: ObservableObject {
             manaRegionStatus = "✓ \(mana.width)x\(mana.height)"
         }
         
+        if let ammo = config.regions.ammoRegionTuple() {
+            ammoReader.setRegion(ammo)
+            ammoRegionStatus = "✓ \(ammo.width)x\(ammo.height)"
+        }
+        
         // Apply to features
         healer.heal = HealConfig(enabled: healEnabled, threshold: Int(healThreshold) ?? 75, hotkey: healHotkey)
         healer.criticalHeal = HealConfig(enabled: criticalEnabled, threshold: Int(criticalThreshold) ?? 50, hotkey: criticalHotkey)
@@ -198,6 +225,10 @@ class TibiaBot: ObservableObject {
         combo.utitoTempoHotkey = utitoTempoHotkey
         combo.utitoTempoEnabled = utitoTempoEnabled
         combo.recastUtito = recastUtito
+        
+        // Paladin Combo
+        paladinComboEnabled = config.combo.paladinComboEnabled
+        combo.paladinComboEnabled = paladinComboEnabled
     }
     
     private func saveConfig() {
@@ -240,6 +271,7 @@ class TibiaBot: ObservableObject {
         config.combo.utitoTempoHotkey = utitoTempoHotkey
         config.combo.utitoTempoEnabled = utitoTempoEnabled
         config.combo.recastUtito = recastUtito
+        config.combo.paladinComboEnabled = paladinComboEnabled
         
         configManager.config = config
         configManager.save()
@@ -310,8 +342,10 @@ class TibiaBot: ObservableObject {
         configManager.reset()
         reader.hpRegion = nil
         reader.manaRegion = nil
+        ammoReader.reset()
         hpRegionStatus = "✗ Not set"
         manaRegionStatus = "✗ Not set"
+        ammoRegionStatus = "✗ Not set"
         loadConfig()
     }
     
@@ -339,6 +373,19 @@ class TibiaBot: ObservableObject {
             
             DispatchQueue.main.async {
                 self.manaRegionStatus = "✓ \(region.width)x\(region.height)"
+            }
+        }
+    }
+    
+    func selectAmmoRegion() {
+        regionSelector.selectRegion { [weak self] region in
+            guard let self = self, let region = region else { return }
+            
+            self.ammoReader.setRegion(region)
+            self.configManager.setAmmoRegion(region)
+            
+            DispatchQueue.main.async {
+                self.ammoRegionStatus = "✓ \(region.width)x\(region.height)"
             }
         }
     }
@@ -446,5 +493,12 @@ class TibiaBot: ObservableObject {
         
         // Process combo (simple timer-based)
         combo.checkAndPress()
+        
+        // Process Paladin Combo (ammo-based)
+        if paladinComboEnabled && combo.isActive {
+            ammoReader.readAmmo(from: screenshot)
+            let ammoDecreased = ammoReader.checkAmmoDecrease()
+            combo.checkPaladinCombo(ammoDecreased: ammoDecreased)
+        }
     }
 }

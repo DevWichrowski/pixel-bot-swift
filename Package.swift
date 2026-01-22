@@ -23,6 +23,7 @@ let package = Package(
                 "Services/KeyPressService.swift",
                 "Services/ScreenCaptureService.swift",
                 "Services/HPManaReader.swift",
+                "Services/AmmoReader.swift",
                 "Services/RegionSelector.swift",
                 "Features/AutoHealer.swift",
                 "Features/AutoEater.swift",

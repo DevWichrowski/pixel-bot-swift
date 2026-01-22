@@ -4,12 +4,13 @@ import Foundation
 struct RegionConfig: Codable, Equatable {
     var hpRegion: [Int]?   // [x, y, width, height]
     var manaRegion: [Int]? // [x, y, width, height]
+    var ammoRegion: [Int]? // [x, y, width, height] - for Paladin Combo
     
     var isHPConfigured: Bool { hpRegion != nil }
     var isManaConfigured: Bool { manaRegion != nil }
+    var isAmmoConfigured: Bool { ammoRegion != nil }
     var isFullyConfigured: Bool { isHPConfigured && isManaConfigured }
     
-    /// Convert to tuple for easier use
     func hpRegionTuple() -> (x: Int, y: Int, width: Int, height: Int)? {
         guard let r = hpRegion, r.count == 4 else { return nil }
         return (r[0], r[1], r[2], r[3])
@@ -17,6 +18,11 @@ struct RegionConfig: Codable, Equatable {
     
     func manaRegionTuple() -> (x: Int, y: Int, width: Int, height: Int)? {
         guard let r = manaRegion, r.count == 4 else { return nil }
+        return (r[0], r[1], r[2], r[3])
+    }
+    
+    func ammoRegionTuple() -> (x: Int, y: Int, width: Int, height: Int)? {
+        guard let r = ammoRegion, r.count == 4 else { return nil }
         return (r[0], r[1], r[2], r[3])
     }
 }
@@ -74,6 +80,9 @@ struct ComboConfig: Codable {
     var utitoTempoHotkey: String = "F9"
     var utitoTempoEnabled: Bool = false  // Use Utito Tempo before combo
     var recastUtito: Bool = false        // Re-cast Utito every 10 seconds
+    
+    // Paladin Combo settings (mutually exclusive with Utito Tempo)
+    var paladinComboEnabled: Bool = false  // Trigger combo on ammo decrease
 }
 
 /// A named preset containing all settings

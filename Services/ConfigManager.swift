@@ -69,6 +69,11 @@ class ConfigManager: ObservableObject {
         save()
     }
     
+    func setAmmoRegion(_ region: (x: Int, y: Int, width: Int, height: Int)) {
+        config.regions.ammoRegion = [region.x, region.y, region.width, region.height]
+        save()
+    }
+    
     var isConfigured: Bool {
         config.regions.isFullyConfigured
     }
