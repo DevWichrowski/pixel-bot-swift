@@ -105,6 +105,23 @@ struct ConfigView: View {
                         
                         Divider().background(Theme.textDim)
                         
+                        ToggleRow(
+                            label: "Spirit Potion Heal",
+                            icon: "🧪",
+                            color: Theme.success,
+                            isOn: $bot.spiritPotionHeal
+                        )
+                        
+                        Text("Crit Heal + Spirit Potion (HP+Mana)")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(Theme.textDim)
+                            .padding(.leading, 16)
+                        
+                        HotkeyRow(label: "🧪 Spirit Key:", hotkey: $bot.spiritPotionHotkey)
+                            .padding(.leading, 16)
+                        
+                        Divider().background(Theme.textDim)
+                        
                         // Cooldown settings
                         HStack {
                             Text("⏱ Spell CD:")

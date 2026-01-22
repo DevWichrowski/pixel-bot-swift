@@ -20,6 +20,9 @@ class AutoHealer {
     /// Critical heal is a potion mode - shares cooldown with mana, has priority
     var criticalIsPotion: Bool = false
     
+    var spiritPotionHeal: Bool = false
+    var spiritPotionHotkey: String = "F3"
+    
     /// Separate cooldown tracking
     private var lastSpellCastTime: Date = .distantPast   // For normal + critical (non-potion mode)
     private var lastPotionCastTime: Date = .distantPast  // For mana + critical (potion mode)
@@ -209,6 +212,32 @@ class AutoHealer {
         }
         
         return (nil, false)
+    }
+    
+    // MARK: - Spirit Potion Heal Mode
+    
+    func checkSpiritPotionHeal(currentHP: Int, currentMana: Int) -> (spellCast: Bool, potionUsed: Bool) {
+        autoDetectMaxHP(currentHP)
+        autoDetectMaxMana(currentMana)
+        
+        guard maxHP != nil else { return (false, false) }
+        
+        let hpPercent = getHPPercent(currentHP)
+        
+        if criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold) {
+            if !isSpellOnCooldown {
+                castSpell(criticalHeal)
+            }
+            
+            if !isPotionOnCooldown {
+                usePotion(spiritPotionHotkey)
+                print("🧪 Spirit Potion used after Critical Heal")
+                return (true, true)
+            }
+            return (true, false)
+        }
+        
+        return (false, false)
     }
     
     // MARK: - Toggle methods

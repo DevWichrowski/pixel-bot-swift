@@ -16,7 +16,25 @@ class TibiaBot: ObservableObject {
     @Published var healEnabled = true { didSet { healer.toggleHeal(healEnabled); saveConfig() } }
     @Published var criticalEnabled = true { didSet { healer.toggleCriticalHeal(criticalEnabled); saveConfig() } }
     @Published var manaEnabled = true { didSet { healer.toggleManaRestore(manaEnabled); saveConfig() } }
-    @Published var criticalIsPotion = false { didSet { healer.criticalIsPotion = criticalIsPotion; saveConfig() } }
+    @Published var criticalIsPotion = false { 
+        didSet { 
+            healer.criticalIsPotion = criticalIsPotion
+            if criticalIsPotion && spiritPotionHeal {
+                spiritPotionHeal = false
+            }
+            saveConfig() 
+        } 
+    }
+    @Published var spiritPotionHeal = false { 
+        didSet { 
+            healer.spiritPotionHeal = spiritPotionHeal
+            if spiritPotionHeal && criticalIsPotion {
+                criticalIsPotion = false
+            }
+            saveConfig() 
+        } 
+    }
+    @Published var spiritPotionHotkey = "F3" { didSet { healer.spiritPotionHotkey = spiritPotionHotkey; saveConfig() } }
     
     @Published var healThreshold = "75" { didSet { healer.setHealThreshold(Int(healThreshold) ?? 75); saveConfig() } }
     @Published var criticalThreshold = "50" { didSet { healer.setCriticalThreshold(Int(criticalThreshold) ?? 50); saveConfig() } }
@@ -112,6 +130,8 @@ class TibiaBot: ObservableObject {
         criticalThreshold = String(config.healer.criticalThreshold)
         criticalHotkey = config.healer.criticalHotkey
         criticalIsPotion = config.healer.criticalIsPotion
+        spiritPotionHeal = config.healer.spiritPotionHeal
+        spiritPotionHotkey = config.healer.spiritPotionHotkey
         
         manaEnabled = config.healer.manaEnabled
         manaThreshold = String(config.healer.manaThreshold)
@@ -150,6 +170,8 @@ class TibiaBot: ObservableObject {
         healer.criticalHeal = HealConfig(enabled: criticalEnabled, threshold: Int(criticalThreshold) ?? 50, hotkey: criticalHotkey)
         healer.manaRestore = HealConfig(enabled: manaEnabled, threshold: Int(manaThreshold) ?? 60, hotkey: manaHotkey)
         healer.criticalIsPotion = criticalIsPotion
+        healer.spiritPotionHeal = spiritPotionHeal
+        healer.spiritPotionHotkey = spiritPotionHotkey
         healer.spellCooldown = Double(spellCooldown) ?? 0.5
         healer.potionCooldown = Double(potionCooldown) ?? 0.5
         
@@ -189,6 +211,8 @@ class TibiaBot: ObservableObject {
         config.healer.criticalThreshold = Int(criticalThreshold) ?? 50
         config.healer.criticalHotkey = criticalHotkey
         config.healer.criticalIsPotion = criticalIsPotion
+        config.healer.spiritPotionHeal = spiritPotionHeal
+        config.healer.spiritPotionHotkey = spiritPotionHotkey
         
         config.healer.manaEnabled = manaEnabled
         config.healer.manaThreshold = Int(manaThreshold) ?? 60
@@ -384,7 +408,17 @@ class TibiaBot: ObservableObject {
         }
         
         // Process healing
-        if criticalIsPotion {
+        if spiritPotionHeal {
+            // Spirit Potion mode: Critical Heal (spell) + Spirit Potion (potion that gives HP+Mana)
+            if let hp = status.hpCurrent, let mana = status.manaCurrent {
+                _ = healer.checkSpiritPotionHeal(currentHP: hp, currentMana: mana)
+            }
+            
+            // Normal heal is independent
+            if let hp = status.hpCurrent {
+                healer.checkNormalHealOnly(currentHP: hp)
+            }
+        } else if criticalIsPotion {
             // Special mode: critical and mana share cooldown
             // Critical heal is handled here with priority over mana
             if let hp = status.hpCurrent, let mana = status.manaCurrent {
