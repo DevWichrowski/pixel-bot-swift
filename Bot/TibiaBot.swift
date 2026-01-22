@@ -465,6 +465,11 @@ class TibiaBot: ObservableObject {
             if let hp = status.hpCurrent {
                 healer.checkNormalHealOnly(currentHP: hp)
             }
+            
+            // Mana restoration (standard mana potions)
+            if let mana = status.manaCurrent {
+                healer.checkAndRestoreMana(currentMana: mana)
+            }
         } else if criticalIsPotion {
             // Special mode: critical and mana share cooldown
             // Critical heal is handled here with priority over mana
