@@ -69,8 +69,15 @@ class KeyPressService {
             return
         }
         
-        // Post events
+        // Post key down
         keyDown.post(tap: .cghidEventTap)
+        
+        // Hold key for 80-120ms to ensure game registers it (human-like speed)
+        // usleep uses microseconds (1ms = 1000us)
+        let holdTime = UInt32.random(in: 80000...120000)
+        usleep(holdTime)
+        
+        // Post key up
         keyUp.post(tap: .cghidEventTap)
         
         print("⌨️ Pressed key: \(key)")
