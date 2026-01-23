@@ -251,9 +251,22 @@ class AutoCombo {
         }
     }
     
+    /// Paladin Combo timing
+    private var lastPaladinComboTime: Date = .distantPast
+    
     func checkPaladinCombo(ammoDecreased: Bool) {
         guard enabled && isActive && paladinComboEnabled && ammoDecreased else { return }
         
+        // Cooldown 0.6 - 0.8 seconds to prevent spam
+        let now = Date()
+        let cooldown = Double.random(in: 0.6...0.8)
+        
+        guard now.timeIntervalSince(lastPaladinComboTime) >= cooldown else {
+            // print("⏳ Paladin Combo on cooldown (elapsed: \(String(format: "%.2f", now.timeIntervalSince(lastPaladinComboTime)))s)")
+            return
+        }
+        
+        lastPaladinComboTime = now
         keyPress.pressKey(comboHotkey)
         print("🏹 Paladin Combo triggered (ammo decreased)")
     }
