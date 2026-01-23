@@ -79,7 +79,6 @@ class AutoHealer {
     
     /// Generate random spell cooldown: base to base + 0.1
     private func randomSpellCooldown() -> TimeInterval {
-        // Requested logic: base + 0.1s max random
         let minCooldown = spellCooldown
         let maxCooldown = spellCooldown + 0.1
         return Double.random(in: minCooldown...maxCooldown)
@@ -87,7 +86,6 @@ class AutoHealer {
     
     /// Generate random potion cooldown: base to base + 0.1
     private func randomPotionCooldown() -> TimeInterval {
-        // Requested logic: base + 0.1s max random
         let minCooldown = potionCooldown
         let maxCooldown = potionCooldown + 0.1
         return Double.random(in: minCooldown...maxCooldown)

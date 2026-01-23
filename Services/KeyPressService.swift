@@ -9,7 +9,7 @@ class KeyPressService {
     
     private var lastKeyPressTime: Date = .distantPast
     // Global cooldown to prevent spamming
-    private var currentMinimumInterval: TimeInterval = 0.10 // 100ms minimum gap between keys
+    private var currentMinimumInterval: TimeInterval = 0.05 // 50ms minimum gap between keys
     
     private func randomKeyInterval() -> TimeInterval {
         // Random interval between key presses (not holding time, but gap between presses)
@@ -101,7 +101,7 @@ class KeyPressService {
         keyDown.post(tap: .cgSessionEventTap)
         
         // CRITICAL: Hold key for 80-120ms to ensure game registers it
-        let holdTime = UInt32.random(in: 80000...120000)
+        let holdTime = UInt32.random(in: 50000...100000)
         // print("⏳ [DEBUG] Holding \(key) for \(holdTime/1000)ms...") // Commented out to reduce spam
         usleep(holdTime)
         
