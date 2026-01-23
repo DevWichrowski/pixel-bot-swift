@@ -2,9 +2,23 @@ import Foundation
 import CoreGraphics
 import Carbon.HIToolbox
 
-/// Service for simulating keyboard key presses using CGEvent
+/// Service for simulating keyboard key presses using CGEvent (non-blocking)
+/// Includes hold time mechanisms to ensure game registration
 class KeyPressService {
     static let shared = KeyPressService()
+    
+    private var lastKeyPressTime: Date = .distantPast
+    // Global cooldown to prevent spamming
+    private var currentMinimumInterval: TimeInterval = 0.10 // 100ms minimum gap between keys
+    
+    private func randomKeyInterval() -> TimeInterval {
+        // Random interval between key presses (not holding time, but gap between presses)
+        Double.random(in: 0.05...0.12)
+    }
+    
+    private var canPressKey: Bool {
+        Date().timeIntervalSince(lastKeyPressTime) >= currentMinimumInterval
+    }
     
     /// Map of key names to CGKeyCode
     private let keyCodeMap: [String: CGKeyCode] = [
@@ -46,10 +60,20 @@ class KeyPressService {
         "return": CGKeyCode(kVK_Return),
         "escape": CGKeyCode(kVK_Escape),
         "tab": CGKeyCode(kVK_Tab),
+        "shift": CGKeyCode(kVK_Shift),
     ]
     
     /// Press a key by name (e.g., "F1", "x", "[")
+    /// Uses CGEvent with proper event source for reliable game registration
     func pressKey(_ key: String) {
+        guard canPressKey else {
+            let elapsed = Date().timeIntervalSince(lastKeyPressTime)
+            if elapsed < currentMinimumInterval * 0.5 {
+                 // Too spammy to log
+            }
+            return
+        }
+        
         let normalizedKey = key.lowercased()
         
         guard let keyCode = keyCodeMap[normalizedKey] else {
@@ -57,29 +81,35 @@ class KeyPressService {
             return
         }
         
-        // Create key down event
-        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) else {
+        // Use combinedSessionState to make events appear as real user input
+        // This helps prevent the "stuck" state where manual input is needed to unblock
+        let eventSource = CGEventSource(stateID: .combinedSessionState)
+        
+        // Create key down event with proper source
+        guard let keyDown = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: true) else {
             print("❌ Failed to create key down event")
             return
         }
         
-        // Create key up event
-        guard let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) else {
+        // Create key up event with proper source
+        guard let keyUp = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: false) else {
             print("❌ Failed to create key up event")
             return
         }
         
-        // Post key down
-        keyDown.post(tap: .cghidEventTap)
+        // Post key down to session event tap (more reliable than HID tap for games)
+        keyDown.post(tap: .cgSessionEventTap)
         
-        // Hold key for 80-120ms to ensure game registers it (human-like speed)
-        // usleep uses microseconds (1ms = 1000us)
+        // CRITICAL: Hold key for 80-120ms to ensure game registers it
         let holdTime = UInt32.random(in: 80000...120000)
+        // print("⏳ [DEBUG] Holding \(key) for \(holdTime/1000)ms...") // Commented out to reduce spam
         usleep(holdTime)
         
         // Post key up
-        keyUp.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cgSessionEventTap)
         
+        lastKeyPressTime = Date()
+        currentMinimumInterval = randomKeyInterval()
         print("⌨️ Pressed key: \(key)")
     }
 }
