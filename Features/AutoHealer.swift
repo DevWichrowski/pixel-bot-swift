@@ -152,15 +152,17 @@ class AutoHealer {
     }
     
     /// Cast a spell (uses spell cooldown with random variation)
+    /// Cooldown is only updated if the key press was actually sent.
     private func castSpell(_ config: HealConfig) {
-        keyPress.pressKey(config.hotkey)
+        guard keyPress.pressKey(config.hotkey) else { return }
         lastSpellCastTime = Date()
         currentSpellCooldownTarget = randomSpellCooldown()
     }
-    
+
     /// Use a potion (uses potion cooldown with random variation)
+    /// Cooldown is only updated if the key press was actually sent.
     private func usePotion(_ hotkey: String) {
-        keyPress.pressKey(hotkey)
+        guard keyPress.pressKey(hotkey) else { return }
         lastPotionCastTime = Date()
         currentPotionCooldownTarget = randomPotionCooldown()
     }

@@ -65,36 +65,34 @@ class KeyPressService {
     
     /// Press a key by name (e.g., "F1", "x", "[")
     /// Uses CGEvent with proper event source for reliable game registration
-    func pressKey(_ key: String) {
+    /// Returns true if the key was actually sent, false if blocked by the global cooldown
+    @discardableResult
+    func pressKey(_ key: String) -> Bool {
         guard canPressKey else {
-            let elapsed = Date().timeIntervalSince(lastKeyPressTime)
-            if elapsed < currentMinimumInterval * 0.5 {
-                 // Too spammy to log
-            }
-            return
+            return false
         }
         
         let normalizedKey = key.lowercased()
         
         guard let keyCode = keyCodeMap[normalizedKey] else {
             print("⚠️ Unknown key: \(key)")
-            return
+            return false
         }
-        
+
         // Use combinedSessionState to make events appear as real user input
         // This helps prevent the "stuck" state where manual input is needed to unblock
         let eventSource = CGEventSource(stateID: .combinedSessionState)
-        
+
         // Create key down event with proper source
         guard let keyDown = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: true) else {
             print("❌ Failed to create key down event")
-            return
+            return false
         }
-        
+
         // Create key up event with proper source
         guard let keyUp = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: false) else {
             print("❌ Failed to create key up event")
-            return
+            return false
         }
         
         // Post key down to session event tap (more reliable than HID tap for games)
@@ -107,9 +105,10 @@ class KeyPressService {
         
         // Post key up
         keyUp.post(tap: .cgSessionEventTap)
-        
+
         lastKeyPressTime = Date()
         currentMinimumInterval = randomKeyInterval()
         print("⌨️ Pressed key: \(key)")
+        return true
     }
 }
