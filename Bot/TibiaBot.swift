@@ -114,7 +114,7 @@ class TibiaBot: ObservableObject {
     
     private var loopTimer: Timer?
     
-    private let refreshRate: TimeInterval = 0.1  // 100ms
+    private let refreshRate: TimeInterval = 0.075  // 75ms
     
     // MARK: - Init
     

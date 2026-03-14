@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 PixelBot is a native macOS automation bot for the game Tibia, written in Swift. It uses Apple's Vision.framework for real-time OCR to read HP/Mana values and automates healing, combos, eating, hasting, and skinning.
 
 - **Platform**: macOS 14.0+
-- **Language**: Swift 6.1.2
+- **Language**: Swift (swift-tools-version 5.9)
 - **Build system**: Swift Package Manager (SPM)
 - **Permissions required**: Accessibility (CGEvent keyboard sim) + Screen Recording (ScreenCaptureService)
 
@@ -27,10 +27,10 @@ swift build -c release
 ./.build/release/PixelBot
 
 # Run a single test file
-swift Tests/test_healer.swift
+swift test_healer.swift
 
 # Run all tests
-swift Tests/test_healer.swift && swift Tests/test_combo.swift && swift Tests/test_cooldowns.swift && swift Tests/test_random_cooldowns.swift && swift Tests/test_paladin_combo.swift && swift Tests/test_spirit_potion.swift
+swift test_healer.swift && swift test_combo.swift && swift test_cooldowns.swift && swift test_random_cooldowns.swift && swift test_paladin_combo.swift && swift test_spirit_potion.swift
 ```
 
 No linting toolchain configured (no SwiftLint).
@@ -65,8 +65,10 @@ TibiaBot.swift  ← Main orchestrator (ObservableObject, ~25 @Published properti
 - **OCR pipeline**: `HPManaReader` hashes the captured image before running Vision OCR — skips processing if the frame hasn't changed.
 - **Combo hotkey**: Uses `CFMachPort` event tap (global, works outside the app window). Press-and-hold detection starts/stops the combo loop.
 - **Config persistence**: `TibiaBot` `@Published` property observers call `ConfigManager.save()` on every change; loaded at startup.
+- **Mutually exclusive modes**: Several feature pairs are exclusive (Utito Tempo vs Paladin Combo, Critical-is-Potion vs Spirit Potion). Enabling one auto-disables the other via `didSet` observers in `TibiaBot`.
+- **Main loop**: `TibiaBot.runLoop()` runs at 100ms interval — captures screen, OCR reads HP/Mana, then runs all feature checks sequentially. Healing mode selection (standard vs criticalIsPotion vs spiritPotionHeal) branches in this loop.
 - **UI**: Single draggable 280×550px overlay window (`OverlayView`) with 3 tabs. Retro pixel-art theme via `PixelArtComponents.swift`.
 
 ### Testing Conventions
 
-Tests are standalone Swift scripts (no XCTest). They use mock classes (e.g. `MockKeyPressService`) and print-based output. There are 79 tests across 6 files in `Tests/`.
+Tests are standalone Swift scripts at the project root (not XCTest). Each file re-declares simplified versions of production classes (e.g. `MockKeyPressService`, inline `AutoHealer`) and uses print-based assertions. Run with `swift test_<name>.swift`.

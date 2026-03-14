@@ -6,16 +6,19 @@ import Carbon.HIToolbox
 /// Includes hold time mechanisms to ensure game registration
 class KeyPressService {
     static let shared = KeyPressService()
-    
+
     private var lastKeyPressTime: Date = .distantPast
     // Global cooldown to prevent spamming
     private var currentMinimumInterval: TimeInterval = 0.05 // 50ms minimum gap between keys
-    
+
+    /// Background queue for key-up delays — keeps main loop unblocked
+    private let keyUpQueue = DispatchQueue(label: "com.pixelbot.keyup", qos: .userInteractive)
+
     private func randomKeyInterval() -> TimeInterval {
         // Random interval between key presses (not holding time, but gap between presses)
         Double.random(in: 0.05...0.12)
     }
-    
+
     private var canPressKey: Bool {
         Date().timeIntervalSince(lastKeyPressTime) >= currentMinimumInterval
     }
@@ -66,48 +69,47 @@ class KeyPressService {
     /// Press a key by name (e.g., "F1", "x", "[")
     /// Uses CGEvent with proper event source for reliable game registration
     /// Returns true if the key was actually sent, false if blocked by the global cooldown
+    /// - Parameter urgent: When true, bypasses the global cooldown (used by healer)
     @discardableResult
-    func pressKey(_ key: String) -> Bool {
-        guard canPressKey else {
+    func pressKey(_ key: String, urgent: Bool = false) -> Bool {
+        guard urgent || canPressKey else {
             return false
         }
-        
+
         let normalizedKey = key.lowercased()
-        
+
         guard let keyCode = keyCodeMap[normalizedKey] else {
             print("⚠️ Unknown key: \(key)")
             return false
         }
 
         // Use combinedSessionState to make events appear as real user input
-        // This helps prevent the "stuck" state where manual input is needed to unblock
         let eventSource = CGEventSource(stateID: .combinedSessionState)
 
-        // Create key down event with proper source
         guard let keyDown = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: true) else {
             print("❌ Failed to create key down event")
             return false
         }
 
-        // Create key up event with proper source
         guard let keyUp = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: false) else {
             print("❌ Failed to create key up event")
             return false
         }
-        
-        // Post key down to session event tap (more reliable than HID tap for games)
-        keyDown.post(tap: .cgSessionEventTap)
-        
-        // CRITICAL: Hold key for 80-120ms to ensure game registers it
-        let holdTime = UInt32.random(in: 50000...100000)
-        // print("⏳ [DEBUG] Holding \(key) for \(holdTime/1000)ms...") // Commented out to reduce spam
-        usleep(holdTime)
-        
-        // Post key up
-        keyUp.post(tap: .cgSessionEventTap)
 
+        // Update timing immediately before async work
         lastKeyPressTime = Date()
         currentMinimumInterval = randomKeyInterval()
+
+        // Post key down instantly on the calling thread
+        keyDown.post(tap: .cgSessionEventTap)
+
+        // Hold + key-up dispatched to background queue so the main loop is never blocked
+        let holdTime = UInt32.random(in: 50000...100000)
+        keyUpQueue.async {
+            usleep(holdTime)
+            keyUp.post(tap: .cgSessionEventTap)
+        }
+
         print("⌨️ Pressed key: \(key)")
         return true
     }
