@@ -412,7 +412,7 @@ class TibiaBot: ObservableObject {
         errorText = ""
         isRunning = true
         statusText = "Running"
-        
+
         // Start main loop
         loopTimer = Timer.scheduledTimer(withTimeInterval: refreshRate, repeats: true) { [weak self] _ in
             self?.runLoop()
@@ -453,7 +453,7 @@ class TibiaBot: ObservableObject {
         if let maxMana = status.manaMax {
             healer.setMaxMana(maxMana)
         }
-        
+
         // Process healing
         if spiritPotionHeal {
             // Spirit Potion mode: Critical Heal (spell) + Spirit Potion (potion that gives HP+Mana)

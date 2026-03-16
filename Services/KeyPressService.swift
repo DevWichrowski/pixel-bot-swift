@@ -2,27 +2,31 @@ import Foundation
 import CoreGraphics
 import Carbon.HIToolbox
 
-/// Service for simulating keyboard key presses using CGEvent (non-blocking)
-/// Includes hold time mechanisms to ensure game registration
+/// Service for simulating keyboard key presses using CGEvent
+/// Uses proper event source configuration to ensure reliable game registration
 class KeyPressService {
     static let shared = KeyPressService()
 
     private var lastKeyPressTime: Date = .distantPast
-    // Global cooldown to prevent spamming
     private var currentMinimumInterval: TimeInterval = 0.05 // 50ms minimum gap between keys
 
-    /// Background queue for key-up delays — keeps main loop unblocked
-    private let keyUpQueue = DispatchQueue(label: "com.pixelbot.keyup", qos: .userInteractive)
+    /// Persistent event source — reused across all presses for consistent state
+    private let eventSource: CGEventSource?
+
+    init() {
+        eventSource = CGEventSource(stateID: .combinedSessionState)
+        // Prevent macOS from suppressing our synthetic events when real input happens nearby
+        eventSource?.localEventsSuppressionInterval = 0.0
+    }
 
     private func randomKeyInterval() -> TimeInterval {
-        // Random interval between key presses (not holding time, but gap between presses)
         Double.random(in: 0.05...0.12)
     }
 
     private var canPressKey: Bool {
         Date().timeIntervalSince(lastKeyPressTime) >= currentMinimumInterval
     }
-    
+
     /// Map of key names to CGKeyCode
     private let keyCodeMap: [String: CGKeyCode] = [
         // Function keys
@@ -38,7 +42,7 @@ class KeyPressService {
         "f10": CGKeyCode(kVK_F10),
         "f11": CGKeyCode(kVK_F11),
         "f12": CGKeyCode(kVK_F12),
-        
+
         // Letters
         "a": CGKeyCode(kVK_ANSI_A), "b": CGKeyCode(kVK_ANSI_B), "c": CGKeyCode(kVK_ANSI_C),
         "d": CGKeyCode(kVK_ANSI_D), "e": CGKeyCode(kVK_ANSI_E), "f": CGKeyCode(kVK_ANSI_F),
@@ -49,13 +53,13 @@ class KeyPressService {
         "s": CGKeyCode(kVK_ANSI_S), "t": CGKeyCode(kVK_ANSI_T), "u": CGKeyCode(kVK_ANSI_U),
         "v": CGKeyCode(kVK_ANSI_V), "w": CGKeyCode(kVK_ANSI_W), "x": CGKeyCode(kVK_ANSI_X),
         "y": CGKeyCode(kVK_ANSI_Y), "z": CGKeyCode(kVK_ANSI_Z),
-        
+
         // Numbers
         "0": CGKeyCode(kVK_ANSI_0), "1": CGKeyCode(kVK_ANSI_1), "2": CGKeyCode(kVK_ANSI_2),
         "3": CGKeyCode(kVK_ANSI_3), "4": CGKeyCode(kVK_ANSI_4), "5": CGKeyCode(kVK_ANSI_5),
         "6": CGKeyCode(kVK_ANSI_6), "7": CGKeyCode(kVK_ANSI_7), "8": CGKeyCode(kVK_ANSI_8),
         "9": CGKeyCode(kVK_ANSI_9),
-        
+
         // Special keys
         "[": CGKeyCode(kVK_ANSI_LeftBracket),
         "]": CGKeyCode(kVK_ANSI_RightBracket),
@@ -65,11 +69,11 @@ class KeyPressService {
         "tab": CGKeyCode(kVK_Tab),
         "shift": CGKeyCode(kVK_Shift),
     ]
-    
+
     /// Press a key by name (e.g., "F1", "x", "[")
-    /// Uses CGEvent with proper event source for reliable game registration
-    /// Returns true if the key was actually sent, false if blocked by the global cooldown
+    /// Key-down, hold, and key-up all happen on the calling thread for reliable game registration.
     /// - Parameter urgent: When true, bypasses the global cooldown (used by healer)
+    /// - Returns: true if the key was actually sent, false if blocked
     @discardableResult
     func pressKey(_ key: String, urgent: Bool = false) -> Bool {
         guard urgent || canPressKey else {
@@ -83,34 +87,30 @@ class KeyPressService {
             return false
         }
 
-        // Use combinedSessionState to make events appear as real user input
-        let eventSource = CGEventSource(stateID: .combinedSessionState)
-
-        guard let keyDown = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: true) else {
-            print("❌ Failed to create key down event")
+        // Create events from the persistent source
+        guard let keyDown = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: false) else {
+            print("❌ Failed to create key events for: \(key)")
             return false
         }
 
-        guard let keyUp = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: false) else {
-            print("❌ Failed to create key up event")
-            return false
-        }
+        // Clear modifier flags — prevents stale shift/ctrl/alt from combinedSessionState
+        // leaking into our synthetic presses
+        keyDown.flags = []
+        keyUp.flags = []
 
-        // Update timing immediately before async work
+        // Complete key press on the same thread: down → hold → up
+        keyDown.post(tap: .cgSessionEventTap)
+
+        let holdTime = UInt32.random(in: 50000...100000)
+        usleep(holdTime)
+
+        keyUp.post(tap: .cgSessionEventTap)
+
         lastKeyPressTime = Date()
         currentMinimumInterval = randomKeyInterval()
 
-        // Post key down instantly on the calling thread
-        keyDown.post(tap: .cgSessionEventTap)
-
-        // Hold + key-up dispatched to background queue so the main loop is never blocked
-        let holdTime = UInt32.random(in: 50000...100000)
-        keyUpQueue.async {
-            usleep(holdTime)
-            keyUp.post(tap: .cgSessionEventTap)
-        }
-
-        print("⌨️ Pressed key: \(key)")
+        print("⌨️ Pressed key: \(key) (hold: \(holdTime/1000)ms)")
         return true
     }
 }

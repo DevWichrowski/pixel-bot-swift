@@ -1,6 +1,10 @@
 import SwiftUI
 import AppKit
 
+enum AppVersion {
+    static let current = "1.1.0"
+}
+
 @main
 struct PixelBotApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -26,7 +30,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Request permissions
         requestPermissions()
         
-        print("🤖 Pixel Bot Swift started!")
+        print("🤖 Pixel Bot v\(AppVersion.current) started!")
     }
     
     func applicationWillTerminate(_ notification: Notification) {

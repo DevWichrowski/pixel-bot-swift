@@ -85,6 +85,9 @@ struct OverlayView: View {
                     Text("PIXEL BOT")
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundColor(Theme.gold)
+                    Text("v\(AppVersion.current)")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(Theme.textDim)
                 }
             }
             

@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 PixelBot is a native macOS automation bot for the game Tibia, written in Swift. It uses Apple's Vision.framework for real-time OCR to read HP/Mana values and automates healing, combos, eating, hasting, and skinning.
 
+- **Current version**: 1.1.0 (defined in `App/PixelBotApp.swift` → `AppVersion.current`)
 - **Platform**: macOS 14.0+
 - **Language**: Swift (swift-tools-version 5.9)
 - **Build system**: Swift Package Manager (SPM)
@@ -51,7 +52,7 @@ TibiaBot.swift  ← Main orchestrator (ObservableObject, ~25 @Published properti
        │     AutoEater    – Food timer
        │     AutoSkinner  – Right-click skinning
        └── Services/
-             KeyPressService      – CGEvent keyboard simulation (80–120ms hold, shared singleton)
+             KeyPressService      – CGEvent keyboard simulation (50–100ms hold, persistent source, urgent bypass)
              HPManaReader         – Vision.framework OCR + image hashing (caches unchanged frames)
              AmmoReader           – Ammo tracking for Paladin combo mode
              ScreenCaptureService – Full/region screenshot (shared singleton)
@@ -66,8 +67,10 @@ TibiaBot.swift  ← Main orchestrator (ObservableObject, ~25 @Published properti
 - **Combo hotkey**: Uses `CFMachPort` event tap (global, works outside the app window). Press-and-hold detection starts/stops the combo loop.
 - **Config persistence**: `TibiaBot` `@Published` property observers call `ConfigManager.save()` on every change; loaded at startup.
 - **Mutually exclusive modes**: Several feature pairs are exclusive (Utito Tempo vs Paladin Combo, Critical-is-Potion vs Spirit Potion). Enabling one auto-disables the other via `didSet` observers in `TibiaBot`.
-- **Main loop**: `TibiaBot.runLoop()` runs at 100ms interval — captures screen, OCR reads HP/Mana, then runs all feature checks sequentially. Healing mode selection (standard vs criticalIsPotion vs spiritPotionHeal) branches in this loop.
+- **Main loop**: `TibiaBot.runLoop()` runs at 75ms interval — captures screen, OCR reads HP/Mana, then runs all feature checks sequentially. Healing mode selection (standard vs criticalIsPotion vs spiritPotionHeal) branches in this loop.
+- **KeyPressService**: Uses a persistent `CGEventSource(stateID: .combinedSessionState)` with `localEventsSuppressionInterval = 0.0` and explicit `flags = []` on events. Key-down, hold (50-100ms), and key-up all execute on the same thread. Healing presses use `urgent: true` to bypass the global cooldown between features.
 - **UI**: Single draggable 280×550px overlay window (`OverlayView`) with 3 tabs. Retro pixel-art theme via `PixelArtComponents.swift`.
+- **Versioning**: Version string lives in `AppVersion.current` in `App/PixelBotApp.swift`. Displayed in the overlay header.
 
 ### Testing Conventions
 
