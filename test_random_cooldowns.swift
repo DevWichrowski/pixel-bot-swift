@@ -81,20 +81,18 @@ class TestAutoHealer {
     
     // MARK: - Random Cooldown Helpers
     
-    /// Generate random spell cooldown: base to base + 0.1
+    /// Generate random spell cooldown: base to base + random(0.1...0.3)
     private func randomSpellCooldown() -> TimeInterval {
-        let minCooldown = spellCooldown
-        let maxCooldown = spellCooldown + 0.1
-        let result = Double.random(in: minCooldown...maxCooldown)
+        let maxOffset = Double.random(in: 0.1...0.3)
+        let result = Double.random(in: spellCooldown...(spellCooldown + maxOffset))
         lastGeneratedSpellCooldown = result
         return result
     }
-    
-    /// Generate random potion cooldown: base to base + 0.1
+
+    /// Generate random potion cooldown: base to base + random(0.08...0.25)
     private func randomPotionCooldown() -> TimeInterval {
-        let minCooldown = potionCooldown
-        let maxCooldown = potionCooldown + 0.1
-        let result = Double.random(in: minCooldown...maxCooldown)
+        let maxOffset = Double.random(in: 0.08...0.25)
+        let result = Double.random(in: potionCooldown...(potionCooldown + maxOffset))
         lastGeneratedPotionCooldown = result
         return result
     }
@@ -329,7 +327,7 @@ func runTests() {
     // ============================================
     // TEST 1: Spell cooldown generates random values in correct range
     // ============================================
-    print("\n--- TEST 1: Spell cooldown random range (0.5s - 0.6s for base 0.5s) ---")
+    print("\n--- TEST 1: Spell cooldown random range (0.5s - 0.8s for base 0.5s) ---")
     keyPress.reset()
     healer.resetAllCooldowns()
     healer.spellCooldown = 0.5
@@ -349,13 +347,13 @@ func runTests() {
     print("  Generated spell cooldowns: min=\(String(format: "%.3f", minSpellCD))s, max=\(String(format: "%.3f", maxSpellCD))s")
     
     test("All spell cooldowns >= 0.5s", spellCooldowns.allSatisfy { $0 >= 0.5 })
-    test("All spell cooldowns <= 0.6s", spellCooldowns.allSatisfy { $0 <= 0.6 })
+    test("All spell cooldowns <= 0.8s", spellCooldowns.allSatisfy { $0 <= 0.8 })
     test("Spell cooldowns have variation (not all same)", Set(spellCooldowns.map { Int($0 * 1000) }).count > 1)
     
     // ============================================
     // TEST 2: Potion cooldown generates random values in correct range
     // ============================================
-    print("\n--- TEST 2: Potion cooldown random range (0.5s - 0.6s for base 0.5s) ---")
+    print("\n--- TEST 2: Potion cooldown random range (0.5s - 0.7s for base 0.5s) ---")
     keyPress.reset()
     healer.resetAllCooldowns()
     healer.potionCooldown = 0.5
@@ -375,7 +373,7 @@ func runTests() {
     print("  Generated potion cooldowns: min=\(String(format: "%.3f", minPotionCD))s, max=\(String(format: "%.3f", maxPotionCD))s")
     
     test("All potion cooldowns >= 0.5s", potionCooldowns.allSatisfy { $0 >= 0.5 })
-    test("All potion cooldowns <= 0.6s", potionCooldowns.allSatisfy { $0 <= 0.6 })
+    test("All potion cooldowns <= 0.75s", potionCooldowns.allSatisfy { $0 <= 0.75 })
     test("Potion cooldowns have variation (not all same)", Set(potionCooldowns.map { Int($0 * 1000) }).count > 1)
     
     // ============================================
@@ -477,23 +475,23 @@ func runTests() {
     print("\n--- TEST 7: Different base values produce correct ranges ---")
     keyPress.reset()
     
-    // Test with base 1.0s spell cooldown (expected range: 1.0s - 1.1s)
+    // Test with base 1.0s spell cooldown (expected range: 1.0s - 1.25s)
     healer.spellCooldown = 1.0
     var highBaseCooldowns: [TimeInterval] = []
-    
+
     for _ in 1...20 {
         healer.resetAllCooldowns()
         _ = healer.checkAndHeal(currentHP: 600)
         highBaseCooldowns.append(healer.lastGeneratedSpellCooldown)
     }
-    
+
     let minHighCD = highBaseCooldowns.min() ?? 0
     let maxHighCD = highBaseCooldowns.max() ?? 0
-    
+
     print("  Base 1.0s: min=\(String(format: "%.3f", minHighCD))s, max=\(String(format: "%.3f", maxHighCD))s")
-    
+
     test("Base 1.0s: all cooldowns >= 1.0s", highBaseCooldowns.allSatisfy { $0 >= 1.0 })
-    test("Base 1.0s: all cooldowns <= 1.1s", highBaseCooldowns.allSatisfy { $0 <= 1.1 })
+    test("Base 1.0s: all cooldowns <= 1.3s", highBaseCooldowns.allSatisfy { $0 <= 1.3 })
     
     // ============================================
     // TEST 8: Spell and potion cooldowns are still independent

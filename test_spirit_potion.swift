@@ -82,15 +82,13 @@ class TestAutoHealer {
     }
     
     private func randomSpellCooldown() -> TimeInterval {
-        let minCooldown = max(0.1, spellCooldown - 0.1)
-        let maxCooldown = spellCooldown + 0.15
-        return Double.random(in: minCooldown...maxCooldown)
+        let maxOffset = Double.random(in: 0.1...0.3)
+        return Double.random(in: spellCooldown...(spellCooldown + maxOffset))
     }
-    
+
     private func randomPotionCooldown() -> TimeInterval {
-        let minCooldown = max(0.1, potionCooldown - 0.1)
-        let maxCooldown = potionCooldown + 0.2
-        return Double.random(in: minCooldown...maxCooldown)
+        let maxOffset = Double.random(in: 0.08...0.25)
+        return Double.random(in: potionCooldown...(potionCooldown + maxOffset))
     }
     
     private func castSpell(_ config: HealConfig) {

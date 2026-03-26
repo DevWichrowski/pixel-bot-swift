@@ -31,6 +31,11 @@ class AutoHealer {
     private var currentSpellCooldownTarget: TimeInterval = 0.5
     private var currentPotionCooldownTarget: TimeInterval = 0.5
 
+    /// Reaction delay — simulates human reaction time on first heal after HP drops
+    private var isReacting: Bool = false          // Currently in "reaction" wait
+    private var reactionEndTime: Date = .distantPast  // When the reaction delay expires
+    private var wasHPBelowThreshold: Bool = false // Tracks if we were already healing
+
     init(keyPress: KeyPressService = .shared) {
         self.keyPress = keyPress
     }
@@ -77,18 +82,56 @@ class AutoHealer {
 
     // MARK: - Random Cooldown Helpers
 
-    /// Generate random spell cooldown: base to base + 0.1
+    /// Generate random spell cooldown: base to base + random(0.1...0.3)
+    /// The max offset itself is randomized each time for less predictable patterns
     private func randomSpellCooldown() -> TimeInterval {
-        let minCooldown = spellCooldown
-        let maxCooldown = spellCooldown + 0.1
-        return Double.random(in: minCooldown...maxCooldown)
+        let maxOffset = Double.random(in: 0.1...0.3)
+        return Double.random(in: spellCooldown...(spellCooldown + maxOffset))
     }
 
-    /// Generate random potion cooldown: base to base + 0.1
+    /// Generate random potion cooldown: base to base + random(0.08...0.25)
+    /// The max offset itself is randomized each time for less predictable patterns
     private func randomPotionCooldown() -> TimeInterval {
-        let minCooldown = potionCooldown
-        let maxCooldown = potionCooldown + 0.1
-        return Double.random(in: minCooldown...maxCooldown)
+        let maxOffset = Double.random(in: 0.08...0.25)
+        return Double.random(in: potionCooldown...(potionCooldown + maxOffset))
+    }
+
+    /// Generate random reaction delay (simulates human noticing HP dropped)
+    private func randomReactionDelay() -> TimeInterval {
+        Double.random(in: 0.1...0.3)
+    }
+
+    /// Check if reaction delay is needed before healing.
+    /// Returns true if healing is allowed (no delay or delay has passed).
+    private func checkReactionDelay(hpBelowThreshold: Bool) -> Bool {
+        if !hpBelowThreshold {
+            // HP is fine — reset reaction state
+            wasHPBelowThreshold = false
+            isReacting = false
+            return true
+        }
+
+        if wasHPBelowThreshold {
+            // Already been healing — no extra delay
+            return true
+        }
+
+        // First time HP dropped below threshold — start reaction
+        if !isReacting {
+            isReacting = true
+            reactionEndTime = Date().addingTimeInterval(randomReactionDelay())
+            return false
+        }
+
+        // Waiting for reaction delay to pass
+        if Date() < reactionEndTime {
+            return false
+        }
+
+        // Reaction delay passed — allow healing
+        wasHPBelowThreshold = true
+        isReacting = false
+        return true
     }
 
     // MARK: - Cooldown Checks
@@ -112,9 +155,14 @@ class AutoHealer {
 
         guard maxHP != nil else { return nil }
 
-        guard !isSpellOnCooldown else { return nil }
-
         let hpPercent = getHPPercent(currentHP)
+        let needsHeal = (heal.enabled && hpPercent < Double(heal.threshold)) ||
+                        (criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold))
+
+        // Reaction delay — simulate human noticing HP dropped
+        guard checkReactionDelay(hpBelowThreshold: needsHeal) else { return nil }
+
+        guard !isSpellOnCooldown else { return nil }
 
         // Critical heal has priority
         if criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold) {
@@ -140,12 +188,19 @@ class AutoHealer {
 
         guard maxHP != nil else { return false }
 
+        let hpPercent = getHPPercent(currentHP)
+        let needsHeal = heal.enabled && hpPercent < Double(heal.threshold)
+
+        // Reaction delay — simulate human noticing HP dropped
+        // Only trigger if not already reacting from another heal check this tick
+        if !wasHPBelowThreshold {
+            guard checkReactionDelay(hpBelowThreshold: needsHeal) else { return false }
+        }
+
         guard !isSpellOnCooldown else { return false }
 
-        let hpPercent = getHPPercent(currentHP)
-
         // Only normal heal - critical is handled separately (potion)
-        if heal.enabled && hpPercent < Double(heal.threshold) {
+        if needsHeal {
             castSpell(heal)
             return true
         }
@@ -199,13 +254,17 @@ class AutoHealer {
         autoDetectMaxHP(currentHP)
         autoDetectMaxMana(currentMana)
 
-        guard !isPotionOnCooldown else { return (nil, false) }
-
         let hpPercent = maxHP != nil ? getHPPercent(currentHP) : 100.0
         let manaPercent = maxMana != nil ? getManaPercent(currentMana) : 100.0
+        let needsHeal = criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold)
+
+        // Reaction delay for critical heal
+        guard checkReactionDelay(hpBelowThreshold: needsHeal) else { return (nil, false) }
+
+        guard !isPotionOnCooldown else { return (nil, false) }
 
         // Priority 1: Critical heal (life-saving) - uses potion
-        if criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold) {
+        if needsHeal {
             usePotion(criticalHeal.hotkey)
             return ("critical", false)
         }
@@ -228,8 +287,12 @@ class AutoHealer {
         guard maxHP != nil else { return (false, false) }
 
         let hpPercent = getHPPercent(currentHP)
+        let needsHeal = criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold)
 
-        if criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold) {
+        // Reaction delay for critical heal
+        guard checkReactionDelay(hpBelowThreshold: needsHeal) else { return (false, false) }
+
+        if needsHeal {
             if !isSpellOnCooldown {
                 castSpell(criticalHeal)
             }
