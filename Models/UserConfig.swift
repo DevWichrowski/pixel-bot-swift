@@ -39,6 +39,7 @@ struct HealerConfig: Codable {
     var criticalIsPotion: Bool = false  // Share cooldown with mana
     var spiritPotionHeal: Bool = false   // Use Critical Spell + Spirit Potion combo
     var spiritPotionHotkey: String = "F3"
+    var spiritPotionThreshold: Int = 40  // Separate threshold for Spirit Potion (decorrelated from critical)
     
     var manaEnabled: Bool = true
     var manaThreshold: Int = 60

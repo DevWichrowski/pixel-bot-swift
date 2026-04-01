@@ -83,6 +83,14 @@ struct StatusView: View {
                             isOn: $bot.manaEnabled,
                             threshold: $bot.manaThreshold
                         )
+
+                        ThresholdRow(
+                            label: "Spirit",
+                            icon: "🧪",
+                            color: Theme.success,
+                            isOn: $bot.spiritPotionHeal,
+                            threshold: $bot.spiritPotionThreshold
+                        )
                     }
                 }
                 

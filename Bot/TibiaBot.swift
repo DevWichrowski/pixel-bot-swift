@@ -35,6 +35,7 @@ class TibiaBot: ObservableObject {
         } 
     }
     @Published var spiritPotionHotkey = "F3" { didSet { healer.spiritPotionHotkey = spiritPotionHotkey; saveConfig() } }
+    @Published var spiritPotionThreshold = "40" { didSet { healer.setSpiritPotionThreshold(Int(spiritPotionThreshold) ?? 40); saveConfig() } }
     
     @Published var healThreshold = "75" { didSet { healer.setHealThreshold(Int(healThreshold) ?? 75); saveConfig() } }
     @Published var criticalThreshold = "50" { didSet { healer.setCriticalThreshold(Int(criticalThreshold) ?? 50); saveConfig() } }
@@ -152,6 +153,7 @@ class TibiaBot: ObservableObject {
         criticalIsPotion = config.healer.criticalIsPotion
         spiritPotionHeal = config.healer.spiritPotionHeal
         spiritPotionHotkey = config.healer.spiritPotionHotkey
+        spiritPotionThreshold = String(config.healer.spiritPotionThreshold)
         
         manaEnabled = config.healer.manaEnabled
         manaThreshold = String(config.healer.manaThreshold)
@@ -197,6 +199,7 @@ class TibiaBot: ObservableObject {
         healer.criticalIsPotion = criticalIsPotion
         healer.spiritPotionHeal = spiritPotionHeal
         healer.spiritPotionHotkey = spiritPotionHotkey
+        healer.spiritPotionThreshold = Int(spiritPotionThreshold) ?? 40
         healer.spellCooldown = Double(spellCooldown) ?? 0.5
         healer.potionCooldown = Double(potionCooldown) ?? 0.5
         
@@ -242,6 +245,7 @@ class TibiaBot: ObservableObject {
         config.healer.criticalIsPotion = criticalIsPotion
         config.healer.spiritPotionHeal = spiritPotionHeal
         config.healer.spiritPotionHotkey = spiritPotionHotkey
+        config.healer.spiritPotionThreshold = Int(spiritPotionThreshold) ?? 40
         
         config.healer.manaEnabled = manaEnabled
         config.healer.manaThreshold = Int(manaThreshold) ?? 60

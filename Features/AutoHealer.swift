@@ -22,6 +22,7 @@ class AutoHealer {
 
     var spiritPotionHeal: Bool = false
     var spiritPotionHotkey: String = "F3"
+    var spiritPotionThreshold: Int = 40
 
     /// Separate cooldown tracking
     private var lastSpellCastTime: Date = .distantPast   // For normal + critical (non-potion mode)
@@ -278,6 +279,13 @@ class AutoHealer {
 
     // MARK: - Spirit Potion Heal Mode
 
+    /// Inter-action delay: random 80-260ms gap between spell and potion in same cycle
+    private func randomInterActionDelay() -> TimeInterval {
+        let baseGap = 0.08
+        let jitter = Double.random(in: 0...0.12) * Double.random(in: 0.5...1.5)
+        return baseGap + jitter
+    }
+
     func checkSpiritPotionHeal(currentHP: Int, currentMana: Int) -> (spellCast: Bool, potionUsed: Bool) {
         autoDetectMaxHP(currentHP)
         autoDetectMaxMana(currentMana)
@@ -285,25 +293,34 @@ class AutoHealer {
         guard maxHP != nil else { return (false, false) }
 
         let hpPercent = getHPPercent(currentHP)
-        let needsHeal = criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold)
+        let needsCriticalHeal = criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold)
+        let needsSpiritPotion = hpPercent < Double(spiritPotionThreshold)
 
-        // Reaction delay for critical heal
-        guard checkReactionDelay(hpBelowThreshold: needsHeal) else { return (false, false) }
+        // Single reaction delay gates both checks (human reacts once to HP dropping)
+        guard checkReactionDelay(hpBelowThreshold: needsCriticalHeal || needsSpiritPotion) else { return (false, false) }
 
-        if needsHeal {
-            if !isSpellOnCooldown {
-                castSpell(criticalHeal)
-            }
+        var spellCast = false
+        var potionUsed = false
 
-            if !isPotionOnCooldown {
-                usePotion(spiritPotionHotkey)
-                print("🧪 Spirit Potion used after Critical Heal")
-                return (true, true)
-            }
-            return (true, false)
+        // Critical heal spell (independent threshold)
+        if needsCriticalHeal && !isSpellOnCooldown {
+            castSpell(criticalHeal)
+            spellCast = true
         }
 
-        return (false, false)
+        // Spirit potion (independent threshold)
+        if needsSpiritPotion && !isPotionOnCooldown {
+            if spellCast {
+                // Both firing same cycle — add human-like delay between key presses
+                let delay = randomInterActionDelay()
+                Thread.sleep(forTimeInterval: delay)
+            }
+            usePotion(spiritPotionHotkey)
+            print("🧪 Spirit Potion used (HP: \(Int(hpPercent))% < \(spiritPotionThreshold)%)")
+            potionUsed = true
+        }
+
+        return (spellCast, potionUsed)
     }
 
     // MARK: - Toggle methods
@@ -335,6 +352,12 @@ class AutoHealer {
     func setManaThreshold(_ value: Int) {
         if (1...100).contains(value) {
             manaRestore.threshold = value
+        }
+    }
+
+    func setSpiritPotionThreshold(_ value: Int) {
+        if (1...100).contains(value) {
+            spiritPotionThreshold = value
         }
     }
 }
