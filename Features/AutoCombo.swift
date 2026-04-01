@@ -41,9 +41,7 @@ class AutoCombo {
     /// Feature enabled
     var enabled: Bool = false
     
-    /// Combo interval range (2.0 to 2.1 seconds)
-    private let comboIntervalMin: TimeInterval = 2.0
-    private let comboIntervalMax: TimeInterval = 2.1
+    /// Combo interval (log-normal around 2.0s)
     private var nextInterval: TimeInterval = 2.0
     private var lastPressTime: Date = .distantPast
     
@@ -54,9 +52,9 @@ class AutoCombo {
     private var currentUtitoDuration: TimeInterval = 10.0  // Current random duration
     private let utitoCooldown: TimeInterval = 2.0   // Cooldown (not used in logic)
     
-    /// Generate random Utito duration 9-12 seconds
+    /// Generate random Utito duration using log-normal (median ~10.5s)
     private func randomUtitoDuration() -> TimeInterval {
-        return Double.random(in: utitoDurationMin...utitoDurationMax)
+        return humanRandom(median: 10.5, spread: 0.1, min: 9.0, max: 13.0)
     }
     
     /// Keyboard listener
@@ -77,7 +75,7 @@ class AutoCombo {
     }
     
     private func randomizeInterval() {
-        nextInterval = Double.random(in: comboIntervalMin...comboIntervalMax)
+        nextInterval = humanRandom(median: 2.0, spread: 0.1, min: 1.8, max: 2.6)
     }
     
     func startListener() {
@@ -197,8 +195,8 @@ class AutoCombo {
                 currentUtitoDuration = randomUtitoDuration()
                 print("⚡ Utito Tempo CAST (next recast in \(String(format: "%.1f", currentUtitoDuration))s)")
                 
-                // Start combo 0.2-0.3s after Utito Tempo
-                let delay = Double.random(in: 0.2...0.3)
+                // Start combo after Utito Tempo with human-like delay
+                let delay = humanRandom(median: 0.25, spread: 0.25, min: 0.15, max: 0.5)
                 lastPressTime = Date().addingTimeInterval(-nextInterval + delay)
             } else {
                 lastPressTime = .distantPast
@@ -210,7 +208,7 @@ class AutoCombo {
             
             // Press auto loot after stopping (if enabled)
             if wasActive && lootOnStop {
-                let delay = Double.random(in: 0.2...0.4)
+                let delay = humanRandom(median: 0.3, spread: 0.3, min: 0.15, max: 0.6)
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                     guard let self = self else { return }
                     self.keyPress.pressKey(self.autoLootHotkey)
@@ -251,22 +249,18 @@ class AutoCombo {
         }
     }
     
-    /// Paladin Combo timing
+    /// Paladin Combo timing — cooldown stored per-cast, not re-rolled each tick
     private var lastPaladinComboTime: Date = .distantPast
-    
+    private var currentPaladinCooldown: TimeInterval = 0.7
+
     func checkPaladinCombo(ammoDecreased: Bool) {
         guard enabled && isActive && paladinComboEnabled && ammoDecreased else { return }
-        
-        // Cooldown 0.6 - 0.8 seconds to prevent spam
+
         let now = Date()
-        let cooldown = Double.random(in: 0.6...0.8)
-        
-        guard now.timeIntervalSince(lastPaladinComboTime) >= cooldown else {
-            // print("⏳ Paladin Combo on cooldown (elapsed: \(String(format: "%.2f", now.timeIntervalSince(lastPaladinComboTime)))s)")
-            return
-        }
-        
+        guard now.timeIntervalSince(lastPaladinComboTime) >= currentPaladinCooldown else { return }
+
         lastPaladinComboTime = now
+        currentPaladinCooldown = humanRandom(median: 0.7, spread: 0.2, min: 0.5, max: 1.1)
         keyPress.pressKey(comboHotkey)
         print("🏹 Paladin Combo triggered (ammo decreased)")
     }

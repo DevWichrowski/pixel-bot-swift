@@ -112,9 +112,7 @@ class TibiaBot: ObservableObject {
     let skinner = AutoSkinner()
     let combo = AutoCombo()
     
-    private var loopTimer: Timer?
-    
-    private let refreshRate: TimeInterval = 0.075  // 75ms
+    private var loopWorkItem: DispatchWorkItem?
     
     // MARK: - Init
     
@@ -402,31 +400,45 @@ class TibiaBot: ObservableObject {
     
     func start() {
         guard !isRunning else { return }
-        
+
         // Check if regions configured
         guard reader.isConfigured else {
             errorText = "Set HP and Mana regions first!"
             return
         }
-        
+
         errorText = ""
         isRunning = true
         statusText = "Running"
 
-        // Start main loop
-        loopTimer = Timer.scheduledTimer(withTimeInterval: refreshRate, repeats: true) { [weak self] _ in
-            self?.runLoop()
-        }
-        
+        // Start jittered main loop
+        scheduleNextTick()
+
         print("🤖 Bot started")
     }
-    
+
     func stop() {
         isRunning = false
         statusText = "Stopped"
-        loopTimer?.invalidate()
-        loopTimer = nil
+        loopWorkItem?.cancel()
+        loopWorkItem = nil
         print("🤖 Bot stopped")
+    }
+
+    /// Jittered loop interval — log-normal around 75ms to destroy fixed grid fingerprint
+    private func nextLoopInterval() -> TimeInterval {
+        humanRandom(median: 0.075, spread: 0.2, min: 0.05, max: 0.12)
+    }
+
+    private func scheduleNextTick() {
+        guard isRunning else { return }
+        let delay = nextLoopInterval()
+        let work = DispatchWorkItem { [weak self] in
+            self?.runLoop()
+            self?.scheduleNextTick()
+        }
+        loopWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
     
     // MARK: - Main Loop
@@ -492,18 +504,25 @@ class TibiaBot: ObservableObject {
             }
         }
         
-        // Process other features
-        eater.checkAndEat()
-        haste.checkAndCast()
-        
-        // Process combo (simple timer-based)
-        combo.checkAndPress()
-        
-        // Process Paladin Combo (ammo-based)
-        if paladinComboEnabled && combo.isActive {
-            ammoReader.readAmmo(from: screenshot)
-            let ammoDecreased = ammoReader.checkAmmoDecrease()
-            combo.checkPaladinCombo(ammoDecreased: ammoDecreased)
+        // Process non-critical features (occasionally shuffled for less predictable ordering)
+        let nonCriticalActions: [() -> Void] = [
+            { [weak self] in self?.eater.checkAndEat() },
+            { [weak self] in self?.haste.checkAndCast() },
+            { [weak self] in
+                self?.combo.checkAndPress()
+                // Process Paladin Combo (ammo-based)
+                if let self = self, self.paladinComboEnabled && self.combo.isActive {
+                    self.ammoReader.readAmmo(from: screenshot)
+                    let ammoDecreased = self.ammoReader.checkAmmoDecrease()
+                    self.combo.checkPaladinCombo(ammoDecreased: ammoDecreased)
+                }
+            },
+        ]
+
+        if Double.random(in: 0...1) < 0.2 {
+            for action in nonCriticalActions.shuffled() { action() }
+        } else {
+            for action in nonCriticalActions { action() }
         }
     }
 }

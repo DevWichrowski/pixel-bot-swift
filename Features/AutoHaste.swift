@@ -19,7 +19,7 @@ class AutoHaste {
         
         if enabled {
             // Schedule first cast (don't cast immediately)
-            let delay = Double.random(in: 31.0...33.0)
+            let delay = humanRandom(median: 32.0, spread: 0.06, min: 30.5, max: 38.0)
             nextCastTime = Date().addingTimeInterval(delay)
             
             let formatter = DateFormatter()
@@ -42,8 +42,8 @@ class AutoHaste {
     private func castNow() {
         keyPress.pressKey(hotkey)
         
-        // Schedule next cast in 31-33 seconds
-        let delay = Double.random(in: 31.0...33.0)
+        // Schedule next cast with human-like variance
+        let delay = humanRandom(median: 32.0, spread: 0.06, min: 30.5, max: 38.0)
         nextCastTime = Date().addingTimeInterval(delay)
         
         let formatter = DateFormatter()

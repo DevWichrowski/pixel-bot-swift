@@ -3,6 +3,23 @@
 import Foundation
 
 // ============================================
+// HUMAN RANDOM (same as production)
+// ============================================
+
+func testHumanRandom(median: Double, spread: Double = 0.3) -> Double {
+    let u1 = Double.random(in: 0.0001...0.9999)
+    let u2 = Double.random(in: 0.0001...0.9999)
+    let z = sqrt(-2.0 * log(u1)) * cos(2.0 * .pi * u2)
+    let value = exp(log(median) + spread * z)
+    return Swift.max(median * 0.5, Swift.min(median * 3.0, value))
+}
+
+func testHumanRandom(median: Double, spread: Double = 0.3, min minVal: Double, max maxVal: Double) -> Double {
+    let value = testHumanRandom(median: median, spread: spread)
+    return Swift.max(minVal, Swift.min(maxVal, value))
+}
+
+// ============================================
 // REACTION DELAY TESTS
 // Tests for human-like reaction time simulation:
 // 1. First heal after HP drop is delayed 100-300ms
@@ -76,17 +93,15 @@ class TestAutoHealer {
     }
 
     private func randomSpellCooldown() -> TimeInterval {
-        let maxOffset = Double.random(in: 0.1...0.3)
-        return Double.random(in: spellCooldown...(spellCooldown + maxOffset))
+        testHumanRandom(median: spellCooldown + 0.08, spread: 0.3, min: spellCooldown, max: spellCooldown + 0.4)
     }
 
     private func randomPotionCooldown() -> TimeInterval {
-        let maxOffset = Double.random(in: 0.08...0.25)
-        return Double.random(in: potionCooldown...(potionCooldown + maxOffset))
+        testHumanRandom(median: potionCooldown + 0.06, spread: 0.3, min: potionCooldown, max: potionCooldown + 0.35)
     }
 
     private func randomReactionDelay() -> TimeInterval {
-        Double.random(in: 0.1...0.3)
+        testHumanRandom(median: 0.18, spread: 0.35, min: 0.1, max: 0.4)
     }
 
     /// Check if reaction delay is needed before healing.
@@ -275,7 +290,7 @@ func runTests() {
     keyPress.reset()
 
     // Wait for reaction delay to pass (max 300ms + margin)
-    Thread.sleep(forTimeInterval: 0.35)
+    Thread.sleep(forTimeInterval: 0.45)
 
     let result2 = healer.checkAndHeal(currentHP: 600)
 
@@ -314,7 +329,7 @@ func runTests() {
     test("should not press any key", keyPress.pressedKeys.isEmpty)
 
     // Wait and heal
-    Thread.sleep(forTimeInterval: 0.35)
+    Thread.sleep(forTimeInterval: 0.45)
 
     let result4b = healer.checkAndHeal(currentHP: 600)
     test("should heal after new reaction delay", result4b == "normal")
@@ -338,7 +353,7 @@ func runTests() {
     print("  Reaction delays: min=\(String(format: "%.3f", minDelay))s, max=\(String(format: "%.3f", maxDelay))s")
 
     test("All delays >= 0.1s", delays.allSatisfy { $0 >= 0.1 })
-    test("All delays <= 0.3s", delays.allSatisfy { $0 <= 0.3 })
+    test("All delays <= 0.4s", delays.allSatisfy { $0 <= 0.4 })
     test("Delays have variation", Set(delays.map { Int($0 * 100) }).count > 1)
 
     // ============================================
@@ -355,7 +370,7 @@ func runTests() {
     test("should not critical heal immediately", result6 == nil)
     test("should not press F2", keyPress.pressedKeys.isEmpty)
 
-    Thread.sleep(forTimeInterval: 0.35)
+    Thread.sleep(forTimeInterval: 0.45)
 
     let result6b = healer.checkAndHeal(currentHP: 300)
     test("should critical heal after delay", result6b == "critical")
@@ -374,7 +389,7 @@ func runTests() {
     test("should not heal immediately (normal only mode)", result7 == false)
     test("should not press any key", keyPress.pressedKeys.isEmpty)
 
-    Thread.sleep(forTimeInterval: 0.35)
+    Thread.sleep(forTimeInterval: 0.45)
 
     let result7b = healer.checkNormalHealOnly(currentHP: 600)
     test("should heal after delay (normal only mode)", result7b == true)
@@ -392,7 +407,7 @@ func runTests() {
 
     test("should not critical-potion heal immediately", result8.healType == nil)
 
-    Thread.sleep(forTimeInterval: 0.35)
+    Thread.sleep(forTimeInterval: 0.45)
 
     let result8b = healer.checkCriticalAndManaWithPriority(currentHP: 300, currentMana: 500)
     test("should critical-potion heal after delay", result8b.healType == "critical")
@@ -424,7 +439,7 @@ func runTests() {
     test("should block first drop", keyPress.pressedKeys.isEmpty)
 
     // Wait for delay
-    Thread.sleep(forTimeInterval: 0.35)
+    Thread.sleep(forTimeInterval: 0.45)
 
     // Heal fires
     _ = healer.checkAndHeal(currentHP: 600)

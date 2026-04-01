@@ -2,6 +2,20 @@
 
 import Foundation
 
+// Human-like random (same as production)
+func testHumanRandom(median: Double, spread: Double = 0.3) -> Double {
+    let u1 = Double.random(in: 0.0001...0.9999)
+    let u2 = Double.random(in: 0.0001...0.9999)
+    let z = sqrt(-2.0 * log(u1)) * cos(2.0 * .pi * u2)
+    let value = exp(log(median) + spread * z)
+    return Swift.max(median * 0.5, Swift.min(median * 3.0, value))
+}
+
+func testHumanRandom(median: Double, spread: Double = 0.3, min minVal: Double, max maxVal: Double) -> Double {
+    let value = testHumanRandom(median: median, spread: spread)
+    return Swift.max(minVal, Swift.min(maxVal, value))
+}
+
 // Mock KeyPress Service
 class MockKeyPressService {
     var pressedKeys: [String] = []
@@ -82,13 +96,11 @@ class TestAutoHealer {
     }
     
     private func randomSpellCooldown() -> TimeInterval {
-        let maxOffset = Double.random(in: 0.1...0.3)
-        return Double.random(in: spellCooldown...(spellCooldown + maxOffset))
+        testHumanRandom(median: spellCooldown + 0.08, spread: 0.3, min: spellCooldown, max: spellCooldown + 0.4)
     }
 
     private func randomPotionCooldown() -> TimeInterval {
-        let maxOffset = Double.random(in: 0.08...0.25)
-        return Double.random(in: potionCooldown...(potionCooldown + maxOffset))
+        testHumanRandom(median: potionCooldown + 0.06, spread: 0.3, min: potionCooldown, max: potionCooldown + 0.35)
     }
     
     private func castSpell(_ config: HealConfig) {

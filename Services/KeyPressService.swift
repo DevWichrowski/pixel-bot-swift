@@ -20,7 +20,7 @@ class KeyPressService {
     }
 
     private func randomKeyInterval() -> TimeInterval {
-        Double.random(in: 0.05...0.15)
+        humanRandom(median: 0.08, spread: 0.3, min: 0.04, max: 0.2)
     }
 
     private var canPressKey: Bool {
@@ -102,7 +102,7 @@ class KeyPressService {
         // Complete key press on the same thread: down → hold → up
         keyDown.post(tap: .cgSessionEventTap)
 
-        let holdTime = UInt32.random(in: 40000...130000)
+        let holdTime = UInt32(humanRandom(median: 80000, spread: 0.3, min: 30000, max: 250000))
         usleep(holdTime)
 
         keyUp.post(tap: .cgSessionEventTap)

@@ -4,11 +4,26 @@ import Foundation
 
 // ============================================
 // RANDOM COOLDOWN TESTS
-// Tests for random cooldown implementation:
-// 1. Utito Tempo: 9-12 seconds
-// 2. Spell CD: base to base + 0.1
-// 3. Potion CD: base to base + 0.1
+// Tests for log-normal random cooldown implementation
 // ============================================
+
+// ============================================
+// HUMAN RANDOM (same as production)
+// ============================================
+
+func testHumanRandom(median: Double, spread: Double = 0.3) -> Double {
+    let u1 = Double.random(in: 0.0001...0.9999)
+    let u2 = Double.random(in: 0.0001...0.9999)
+    let z = sqrt(-2.0 * log(u1)) * cos(2.0 * .pi * u2)
+    let mu = log(median)
+    let value = exp(mu + spread * z)
+    return Swift.max(median * 0.5, Swift.min(median * 3.0, value))
+}
+
+func testHumanRandom(median: Double, spread: Double = 0.3, min minVal: Double, max maxVal: Double) -> Double {
+    let value = testHumanRandom(median: median, spread: spread)
+    return Swift.max(minVal, Swift.min(maxVal, value))
+}
 
 // ============================================
 // MOCK CLASSES FOR TESTING
@@ -81,18 +96,16 @@ class TestAutoHealer {
     
     // MARK: - Random Cooldown Helpers
     
-    /// Generate random spell cooldown: base to base + random(0.1...0.3)
+    /// Generate random spell cooldown using log-normal distribution
     private func randomSpellCooldown() -> TimeInterval {
-        let maxOffset = Double.random(in: 0.1...0.3)
-        let result = Double.random(in: spellCooldown...(spellCooldown + maxOffset))
+        let result = testHumanRandom(median: spellCooldown + 0.08, spread: 0.3, min: spellCooldown, max: spellCooldown + 0.4)
         lastGeneratedSpellCooldown = result
         return result
     }
 
-    /// Generate random potion cooldown: base to base + random(0.08...0.25)
+    /// Generate random potion cooldown using log-normal distribution
     private func randomPotionCooldown() -> TimeInterval {
-        let maxOffset = Double.random(in: 0.08...0.25)
-        let result = Double.random(in: potionCooldown...(potionCooldown + maxOffset))
+        let result = testHumanRandom(median: potionCooldown + 0.06, spread: 0.3, min: potionCooldown, max: potionCooldown + 0.35)
         lastGeneratedPotionCooldown = result
         return result
     }
@@ -251,9 +264,9 @@ class TestAutoCombo {
         self.keyPress = keyPress
     }
     
-    /// Generate random Utito duration 9-12 seconds
+    /// Generate random Utito duration using log-normal
     private func randomUtitoDuration() -> TimeInterval {
-        let result = Double.random(in: utitoDurationMin...utitoDurationMax)
+        let result = testHumanRandom(median: 10.5, spread: 0.1, min: 9.0, max: 13.0)
         lastGeneratedUtitoDuration = result
         return result
     }
@@ -327,7 +340,7 @@ func runTests() {
     // ============================================
     // TEST 1: Spell cooldown generates random values in correct range
     // ============================================
-    print("\n--- TEST 1: Spell cooldown random range (0.5s - 0.8s for base 0.5s) ---")
+    print("\n--- TEST 1: Spell cooldown log-normal range (base 0.5s) ---")
     keyPress.reset()
     healer.resetAllCooldowns()
     healer.spellCooldown = 0.5
@@ -347,13 +360,13 @@ func runTests() {
     print("  Generated spell cooldowns: min=\(String(format: "%.3f", minSpellCD))s, max=\(String(format: "%.3f", maxSpellCD))s")
     
     test("All spell cooldowns >= 0.5s", spellCooldowns.allSatisfy { $0 >= 0.5 })
-    test("All spell cooldowns <= 0.8s", spellCooldowns.allSatisfy { $0 <= 0.8 })
+    test("All spell cooldowns <= 0.9s", spellCooldowns.allSatisfy { $0 <= 0.9 })
     test("Spell cooldowns have variation (not all same)", Set(spellCooldowns.map { Int($0 * 1000) }).count > 1)
     
     // ============================================
     // TEST 2: Potion cooldown generates random values in correct range
     // ============================================
-    print("\n--- TEST 2: Potion cooldown random range (0.5s - 0.7s for base 0.5s) ---")
+    print("\n--- TEST 2: Potion cooldown log-normal range (base 0.5s) ---")
     keyPress.reset()
     healer.resetAllCooldowns()
     healer.potionCooldown = 0.5
@@ -373,7 +386,7 @@ func runTests() {
     print("  Generated potion cooldowns: min=\(String(format: "%.3f", minPotionCD))s, max=\(String(format: "%.3f", maxPotionCD))s")
     
     test("All potion cooldowns >= 0.5s", potionCooldowns.allSatisfy { $0 >= 0.5 })
-    test("All potion cooldowns <= 0.75s", potionCooldowns.allSatisfy { $0 <= 0.75 })
+    test("All potion cooldowns <= 0.85s", potionCooldowns.allSatisfy { $0 <= 0.85 })
     test("Potion cooldowns have variation (not all same)", Set(potionCooldowns.map { Int($0 * 1000) }).count > 1)
     
     // ============================================
@@ -397,7 +410,7 @@ func runTests() {
     print("  Generated Utito durations: min=\(String(format: "%.2f", minUtitoDur))s, max=\(String(format: "%.2f", maxUtitoDur))s")
     
     test("All Utito durations >= 9.0s", utitoDurations.allSatisfy { $0 >= 9.0 })
-    test("All Utito durations <= 12.0s", utitoDurations.allSatisfy { $0 <= 12.0 })
+    test("All Utito durations <= 13.0s", utitoDurations.allSatisfy { $0 <= 13.0 })
     test("Utito durations have variation", Set(utitoDurations.map { Int($0 * 100) }).count > 1)
     
     // ============================================
@@ -491,7 +504,7 @@ func runTests() {
     print("  Base 1.0s: min=\(String(format: "%.3f", minHighCD))s, max=\(String(format: "%.3f", maxHighCD))s")
 
     test("Base 1.0s: all cooldowns >= 1.0s", highBaseCooldowns.allSatisfy { $0 >= 1.0 })
-    test("Base 1.0s: all cooldowns <= 1.3s", highBaseCooldowns.allSatisfy { $0 <= 1.3 })
+    test("Base 1.0s: all cooldowns <= 1.4s", highBaseCooldowns.allSatisfy { $0 <= 1.4 })
     
     // ============================================
     // TEST 8: Spell and potion cooldowns are still independent

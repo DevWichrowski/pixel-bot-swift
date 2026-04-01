@@ -82,23 +82,21 @@ class AutoHealer {
 
     // MARK: - Random Cooldown Helpers
 
-    /// Generate random spell cooldown: base to base + random(0.1...0.3)
-    /// The max offset itself is randomized each time for less predictable patterns
+    /// Generate random spell cooldown using log-normal distribution
+    /// Median is slightly above base, with right-skewed tail
     private func randomSpellCooldown() -> TimeInterval {
-        let maxOffset = Double.random(in: 0.1...0.3)
-        return Double.random(in: spellCooldown...(spellCooldown + maxOffset))
+        humanRandom(median: spellCooldown + 0.08, spread: 0.3, min: spellCooldown, max: spellCooldown + 0.4)
     }
 
-    /// Generate random potion cooldown: base to base + random(0.08...0.25)
-    /// The max offset itself is randomized each time for less predictable patterns
+    /// Generate random potion cooldown using log-normal distribution
     private func randomPotionCooldown() -> TimeInterval {
-        let maxOffset = Double.random(in: 0.08...0.25)
-        return Double.random(in: potionCooldown...(potionCooldown + maxOffset))
+        humanRandom(median: potionCooldown + 0.06, spread: 0.3, min: potionCooldown, max: potionCooldown + 0.35)
     }
 
     /// Generate random reaction delay (simulates human noticing HP dropped)
+    /// Log-normal: most reactions ~180ms, occasional longer delays
     private func randomReactionDelay() -> TimeInterval {
-        Double.random(in: 0.1...0.3)
+        humanRandom(median: 0.18, spread: 0.35, min: 0.1, max: 0.4)
     }
 
     /// Check if reaction delay is needed before healing.

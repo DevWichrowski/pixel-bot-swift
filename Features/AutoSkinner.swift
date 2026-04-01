@@ -87,8 +87,8 @@ class AutoSkinner {
     }
     
     private func performSkinning() {
-        // Wait random delay and press hotkey
-        let delay = Double.random(in: 0.2...0.4)
+        // Wait human-like delay and press hotkey
+        let delay = humanRandom(median: 0.35, spread: 0.35, min: 0.15, max: 0.8)
         
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self = self else { return }

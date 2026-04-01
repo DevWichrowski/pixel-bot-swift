@@ -19,6 +19,7 @@ let package = Package(
                 "Models/StatusReading.swift",
                 "Models/HealConfig.swift",
                 "Models/UserConfig.swift",
+                "Services/HumanRandom.swift",
                 "Services/ConfigManager.swift",
                 "Services/KeyPressService.swift",
                 "Services/ScreenCaptureService.swift",

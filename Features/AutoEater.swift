@@ -34,9 +34,9 @@ class AutoEater {
         if enabled {
             // When enabling, schedule first meal (don't eat immediately)
             let duration = TimeInterval(food.duration * 2)
-            let delay = duration + Double.random(in: 1.0...6.0)
+            let delay = duration + humanRandom(median: 3.0, spread: 0.4, min: 1.0, max: 10.0)
             nextEatTime = Date().addingTimeInterval(delay)
-            
+
             let formatter = DateFormatter()
             formatter.dateFormat = "HH:mm:ss"
             print("🍖 Auto Eater enabled. First meal at \(formatter.string(from: nextEatTime)) (in \(Int(delay))s)")
@@ -58,13 +58,13 @@ class AutoEater {
         // Press hotkey twice with interval
         keyPress.pressKey(hotkey)
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 0.2...0.4)) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + humanRandom(median: 0.3, spread: 0.3, min: 0.15, max: 0.6)) { [weak self] in
             self?.keyPress.pressKey(self?.hotkey ?? "]")
         }
         
         // Calculate wait time (duration * 2 for 2 items + random delay)
         let duration = TimeInterval(food.duration * 2)
-        let delay = duration + Double.random(in: 1.0...6.0)
+        let delay = duration + humanRandom(median: 3.0, spread: 0.4, min: 1.0, max: 10.0)
         nextEatTime = Date().addingTimeInterval(delay)
         
         let formatter = DateFormatter()

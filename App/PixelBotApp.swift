@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 enum AppVersion {
-    static let current = "1.1.0"
+    static let current = "1.3.0"
 }
 
 @main
