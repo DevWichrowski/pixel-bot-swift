@@ -123,40 +123,7 @@ struct ConfigView: View {
                         
                         Divider().background(Theme.textDim)
                         
-                        ToggleRow(
-                            label: "Spirit Potion Heal",
-                            icon: "🧪",
-                            color: Theme.success,
-                            isOn: $bot.spiritPotionHeal
-                        )
-                        
-                        Text("Crit Heal + Spirit Potion (HP+Mana)")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundColor(Theme.textDim)
-                            .padding(.leading, 16)
-
                         HotkeyRow(label: "🧪 Spirit Key:", hotkey: $bot.spiritPotionHotkey)
-                            .padding(.leading, 16)
-
-                        HStack {
-                            Text("🧪 Spirit HP%:")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(Theme.text)
-
-                            Spacer()
-
-                            TextField("", text: $bot.spiritPotionThreshold)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(Theme.textBright)
-                                .frame(width: 40, height: 20)
-                                .textFieldStyle(.roundedBorder)
-                                .multilineTextAlignment(.center)
-
-                            Text("%")
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundColor(Theme.textDim)
-                        }
-                        .padding(.leading, 16)
                         
                         Divider().background(Theme.textDim)
                         

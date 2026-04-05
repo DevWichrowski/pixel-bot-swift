@@ -296,8 +296,11 @@ class AutoHealer {
         let needsCriticalHeal = criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold)
         let needsSpiritPotion = hpPercent < Double(spiritPotionThreshold)
 
+        // Nothing to do — don't touch reaction state (normal heal may need it)
+        guard needsCriticalHeal || needsSpiritPotion else { return (false, false) }
+
         // Single reaction delay gates both checks (human reacts once to HP dropping)
-        guard checkReactionDelay(hpBelowThreshold: needsCriticalHeal || needsSpiritPotion) else { return (false, false) }
+        guard checkReactionDelay(hpBelowThreshold: true) else { return (false, false) }
 
         var spellCast = false
         var potionUsed = false
