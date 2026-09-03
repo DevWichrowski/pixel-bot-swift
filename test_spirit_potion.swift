@@ -45,7 +45,10 @@ struct HealConfig {
 class TestAutoHealer {
     private let keyPress: MockKeyPressService
     
-    var spellCooldown: TimeInterval = 0.5
+    var spellCooldown: TimeInterval {
+        get { 1.0 }
+        set { _ = newValue }
+    }
     var potionCooldown: TimeInterval = 0.5
     
     var maxHP: Int?
@@ -97,7 +100,7 @@ class TestAutoHealer {
     }
     
     private func randomSpellCooldown() -> TimeInterval {
-        testHumanRandom(median: spellCooldown + 0.08, spread: 0.3, min: spellCooldown, max: spellCooldown + 0.4)
+        1.0
     }
 
     private func randomPotionCooldown() -> TimeInterval {

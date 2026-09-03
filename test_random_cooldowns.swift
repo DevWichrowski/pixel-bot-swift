@@ -65,8 +65,11 @@ struct HealConfig {
 class TestAutoHealer {
     private let keyPress: MockKeyPressService
     
-    // Configurable cooldowns (base values)
-    var spellCooldown: TimeInterval = 0.5   // For heal spells
+    // Healing group cooldown is fixed; the setter keeps old test call sites source-compatible.
+    var spellCooldown: TimeInterval {
+        get { 1.0 }
+        set { _ = newValue }
+    }
     var potionCooldown: TimeInterval = 0.5  // For potions
     
     var maxHP: Int?
@@ -83,11 +86,11 @@ class TestAutoHealer {
     private var lastPotionCastTime: Date = .distantPast
     
     // Random cooldown tracking - each cast gets a new random cooldown
-    private var currentSpellCooldownTarget: TimeInterval = 0.5
+    private var currentSpellCooldownTarget: TimeInterval = 1.0
     private var currentPotionCooldownTarget: TimeInterval = 0.5
     
     // Store generated cooldowns for testing
-    var lastGeneratedSpellCooldown: TimeInterval = 0.5
+    var lastGeneratedSpellCooldown: TimeInterval = 1.0
     var lastGeneratedPotionCooldown: TimeInterval = 0.5
     
     init(keyPress: MockKeyPressService) {
@@ -96,11 +99,10 @@ class TestAutoHealer {
     
     // MARK: - Random Cooldown Helpers
     
-    /// Generate random spell cooldown using log-normal distribution
+    /// Return the fixed Tibia healing group cooldown.
     private func randomSpellCooldown() -> TimeInterval {
-        let result = testHumanRandom(median: spellCooldown + 0.08, spread: 0.3, min: spellCooldown, max: spellCooldown + 0.4)
-        lastGeneratedSpellCooldown = result
-        return result
+        lastGeneratedSpellCooldown = 1.0
+        return 1.0
     }
 
     /// Generate random potion cooldown using log-normal distribution
@@ -338,9 +340,9 @@ func runTests() {
     let combo = TestAutoCombo(keyPress: keyPress)
     
     // ============================================
-    // TEST 1: Spell cooldown generates random values in correct range
+    // TEST 1: Healing group cooldown is fixed
     // ============================================
-    print("\n--- TEST 1: Spell cooldown log-normal range (base 0.5s) ---")
+    print("\n--- TEST 1: Fixed 1.0s healing group cooldown ---")
     keyPress.reset()
     healer.resetAllCooldowns()
     healer.spellCooldown = 0.5
@@ -359,9 +361,7 @@ func runTests() {
     
     print("  Generated spell cooldowns: min=\(String(format: "%.3f", minSpellCD))s, max=\(String(format: "%.3f", maxSpellCD))s")
     
-    test("All spell cooldowns >= 0.5s", spellCooldowns.allSatisfy { $0 >= 0.5 })
-    test("All spell cooldowns <= 0.9s", spellCooldowns.allSatisfy { $0 <= 0.9 })
-    test("Spell cooldowns have variation (not all same)", Set(spellCooldowns.map { Int($0 * 1000) }).count > 1)
+    test("All spell cooldowns equal 1.0s", spellCooldowns.allSatisfy { $0 == 1.0 })
     
     // ============================================
     // TEST 2: Potion cooldown generates random values in correct range
@@ -414,9 +414,9 @@ func runTests() {
     test("Utito durations have variation", Set(utitoDurations.map { Int($0 * 100) }).count > 1)
     
     // ============================================
-    // TEST 4: New random cooldown generated after each spell cast
+    // TEST 4: Healing cooldown remains fixed after each spell cast
     // ============================================
-    print("\n--- TEST 4: New random cooldown after each spell cast ---")
+    print("\n--- TEST 4: Fixed cooldown after each spell cast ---")
     keyPress.reset()
     healer.resetAllCooldowns()
     
@@ -434,7 +434,7 @@ func runTests() {
     }
     
     print("  Different cooldowns generated: \(differentCooldowns)/9")
-    test("Random cooldowns are generated (at least 3 different)", differentCooldowns >= 3)
+    test("Spell cooldown never varies", differentCooldowns == 0)
     
     // ============================================
     // TEST 5: Utito recast uses new random duration each time
@@ -459,9 +459,9 @@ func runTests() {
     test("Utito durations vary between recasts", uniqueDurations >= 2)
     
     // ============================================
-    // TEST 6: Minimum cooldown check
+    // TEST 6: Stored base values do not change the fixed cooldown
     // ============================================
-    print("\n--- TEST 6: Low base cooldown check ---")
+    print("\n--- TEST 6: Legacy base value is ignored ---")
     keyPress.reset()
     healer.resetAllCooldowns()
     healer.spellCooldown = 0.05  // Very low base cooldown
@@ -475,17 +475,17 @@ func runTests() {
     }
     
     let minLowCD = lowBaseCooldowns.min() ?? 0
-    print("  Min cooldown with 0.05s base: \(String(format: "%.3f", minLowCD))s")
+    print("  Cooldown with ignored 0.05s legacy base: \(String(format: "%.3f", minLowCD))s")
     
-    test("Cooldown respects base 0.05s", lowBaseCooldowns.allSatisfy { $0 >= 0.05 })
+    test("Cooldown remains 1.0s", lowBaseCooldowns.allSatisfy { $0 == 1.0 })
     
     // Reset base cooldown
     healer.spellCooldown = 0.5
     
     // ============================================
-    // TEST 7: Different base values produce correct ranges
+    // TEST 7: One-second legacy base stays at the fixed value
     // ============================================
-    print("\n--- TEST 7: Different base values produce correct ranges ---")
+    print("\n--- TEST 7: Fixed value with 1.0s legacy base ---")
     keyPress.reset()
     
     // Test with base 1.0s spell cooldown (expected range: 1.0s - 1.25s)
@@ -503,8 +503,7 @@ func runTests() {
 
     print("  Base 1.0s: min=\(String(format: "%.3f", minHighCD))s, max=\(String(format: "%.3f", maxHighCD))s")
 
-    test("Base 1.0s: all cooldowns >= 1.0s", highBaseCooldowns.allSatisfy { $0 >= 1.0 })
-    test("Base 1.0s: all cooldowns <= 1.4s", highBaseCooldowns.allSatisfy { $0 <= 1.4 })
+    test("Base 1.0s: all cooldowns equal 1.0s", highBaseCooldowns.allSatisfy { $0 == 1.0 })
     
     // ============================================
     // TEST 8: Spell and potion cooldowns are still independent
@@ -550,9 +549,9 @@ func runTests() {
     test("Recast after duration expires", keyPress.f8Count == initialCount + 1)
     
     // ============================================
-    // TEST 10: Statistical distribution test
+    // TEST 10: Fixed spell cooldown has one bucket
     // ============================================
-    print("\n--- TEST 10: Statistical distribution (randomness quality) ---")
+    print("\n--- TEST 10: Fixed spell cooldown bucket ---")
     keyPress.reset()
     healer.resetAllCooldowns()
     healer.spellCooldown = 0.5
@@ -573,8 +572,7 @@ func runTests() {
         print("    \(String(format: "%.2f", rangeStart))-\(String(format: "%.2f", rangeEnd))s: \(cooldownBuckets[bucket]!) samples")
     }
     
-    // Expect at least 2 different buckets for good distribution (0.1s range covers 2 buckets of 0.05s)
-    test("Good distribution (at least 2 buckets)", cooldownBuckets.count >= 2)
+    test("Fixed cooldown uses exactly one bucket", cooldownBuckets.count == 1)
     
     // ============================================
     // SUMMARY

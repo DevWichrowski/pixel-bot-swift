@@ -2,32 +2,254 @@ import Foundation
 import CoreGraphics
 import Carbon.HIToolbox
 
-/// Service for simulating keyboard key presses using CGEvent
-/// Uses proper event source configuration to ensure reliable game registration
-class KeyPressService {
-    static let shared = KeyPressService()
+struct KeyPressRequestGroup: Hashable {
+    private let id = UUID()
+}
 
-    private var lastKeyPressTime: Date = .distantPast
-    private var currentMinimumInterval: TimeInterval = 0.05 // 50ms minimum gap between keys
+enum KeyPressLifecyclePhase: String, Sendable {
+    case queued
+    case keyDown
+    case keyUp
+    case cancelled
+    case failed
+}
 
-    /// Persistent event source — reused across all presses for consistent state
+enum KeyPressPriority: String, Sendable {
+    case regular
+    case urgent
+    case healing
+}
+
+struct KeyPressLifecycleEvent: Sendable {
+    let requestID: UUID
+    let key: String
+    let priority: KeyPressPriority
+    let phase: KeyPressLifecyclePhase
+    let timestamp: TimeInterval
+    let queueWait: TimeInterval
+    let validityRemaining: TimeInterval?
+}
+
+typealias KeyPressLifecycleHandler = @Sendable (KeyPressLifecycleEvent) -> Void
+
+protocol KeyPressServicing: AnyObject {
+    @discardableResult
+    func pressKey(
+        _ key: String,
+        priority: KeyPressPriority,
+        group: KeyPressRequestGroup?,
+        validUntil: TimeInterval?,
+        lifecycle: KeyPressLifecycleHandler?
+    ) -> Bool
+
+    func cancelPendingRequests(in group: KeyPressRequestGroup)
+}
+
+extension KeyPressServicing {
+    @discardableResult
+    func pressKey(_ key: String) -> Bool {
+        pressKey(key, priority: .regular, group: nil, validUntil: nil, lifecycle: nil)
+    }
+
+    @discardableResult
+    func pressKey(_ key: String, priority: KeyPressPriority) -> Bool {
+        pressKey(key, priority: priority, group: nil, validUntil: nil, lifecycle: nil)
+    }
+
+    @discardableResult
+    func pressKey(
+        _ key: String,
+        priority: KeyPressPriority,
+        group: KeyPressRequestGroup?
+    ) -> Bool {
+        pressKey(key, priority: priority, group: group, validUntil: nil, lifecycle: nil)
+    }
+
+    @discardableResult
+    func pressKey(_ key: String, urgent: Bool) -> Bool {
+        pressKey(
+            key,
+            priority: urgent ? .urgent : .regular,
+            group: nil,
+            validUntil: nil,
+            lifecycle: nil
+        )
+    }
+
+    @discardableResult
+    func pressKey(
+        _ key: String,
+        urgent: Bool,
+        group: KeyPressRequestGroup?
+    ) -> Bool {
+        pressKey(
+            key,
+            priority: urgent ? .urgent : .regular,
+            group: group,
+            validUntil: nil,
+            lifecycle: nil
+        )
+    }
+
+    @discardableResult
+    func pressKey(
+        _ key: String,
+        urgent: Bool,
+        group: KeyPressRequestGroup?,
+        validUntil: TimeInterval?,
+        lifecycle: KeyPressLifecycleHandler?
+    ) -> Bool {
+        pressKey(
+            key,
+            priority: urgent ? .urgent : .regular,
+            group: group,
+            validUntil: validUntil,
+            lifecycle: lifecycle
+        )
+    }
+}
+
+/// Service for simulating keyboard key presses using CGEvent.
+/// Requests are serialized so callers never block while a key is being held.
+class KeyPressService: KeyPressServicing {
+    static let shared = KeyPressService(diagnosticLogger: PixelBotDiagnosticLogger.shared)
+
+    typealias EventPoster = (_ keyCode: CGKeyCode, _ isKeyDown: Bool) -> Bool
+    typealias DelayProvider = () -> TimeInterval
+
+    private struct KeyRequest {
+        let id: UUID
+        let name: String
+        let keyCode: CGKeyCode
+        let priority: KeyPressPriority
+        let group: KeyPressRequestGroup?
+        let queuedAt: TimeInterval
+        let validUntil: TimeInterval?
+        let lifecycle: KeyPressLifecycleHandler?
+    }
+
+    private struct ActiveRequest {
+        let request: KeyRequest
+        let holdDuration: TimeInterval
+        let gapDuration: TimeInterval
+    }
+
+    private struct PostKeyUpGate {
+        let priority: KeyPressPriority
+        let validUntil: TimeInterval
+    }
+
+    private let stateQueue = DispatchQueue(label: "com.pixelbot.key-press-service")
+    private let stateQueueKey = DispatchSpecificKey<Void>()
+    private let eventPoster: EventPoster
+    private let healingHoldDurationProvider: DelayProvider
+    private let urgentHoldDurationProvider: DelayProvider
+    private let regularHoldDurationProvider: DelayProvider
+    private let healingGapDurationProvider: DelayProvider
+    private let urgentGapDurationProvider: DelayProvider
+    private let regularGapDurationProvider: DelayProvider
+    private let keyUpRetryInterval: TimeInterval
+    private let diagnosticLogger: DiagnosticLogging?
+
+    private var healingRequests: [KeyRequest] = []
+    private var urgentRequests: [KeyRequest] = []
+    private var regularRequests: [KeyRequest] = []
+    private var activeRequest: ActiveRequest?
+    private var postKeyUpGate: PostKeyUpGate?
+    private var scheduledActiveTransition: DispatchWorkItem?
+    private var scheduledGateTransition: DispatchWorkItem?
+    private var scheduledStart: DispatchWorkItem?
+    private var activeTransitionGeneration = 0
+    private var gateTransitionGeneration = 0
+    private var startGeneration = 0
+    private var acceptsRequests = true
+    private var didLogKeyUpFailure = false
+
+    /// Persistent event source, reused across all presses for consistent state.
     private let eventSource: CGEventSource?
 
-    init() {
-        eventSource = CGEventSource(stateID: .combinedSessionState)
-        // Prevent macOS from suppressing our synthetic events when real input happens nearby
-        eventSource?.localEventsSuppressionInterval = 0.0
+    init(
+        eventPoster: EventPoster? = nil,
+        holdDurationProvider: DelayProvider? = nil,
+        gapDurationProvider: DelayProvider? = nil,
+        healingHoldDurationProvider: @escaping DelayProvider = {
+            KeyPressService.defaultHoldDuration(for: .healing)
+        },
+        urgentHoldDurationProvider: @escaping DelayProvider = {
+            KeyPressService.defaultHoldDuration(for: .urgent)
+        },
+        regularHoldDurationProvider: @escaping DelayProvider = {
+            KeyPressService.defaultHoldDuration(for: .regular)
+        },
+        healingGapDurationProvider: @escaping DelayProvider = {
+            KeyPressService.defaultGapDuration(for: .healing)
+        },
+        urgentGapDurationProvider: @escaping DelayProvider = {
+            KeyPressService.defaultGapDuration(for: .urgent)
+        },
+        regularGapDurationProvider: @escaping DelayProvider = {
+            KeyPressService.defaultGapDuration(for: .regular)
+        },
+        keyUpRetryInterval: TimeInterval = 0.01,
+        diagnosticLogger: DiagnosticLogging? = nil
+    ) {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        source?.localEventsSuppressionInterval = 0.0
+        eventSource = source
+
+        self.healingHoldDurationProvider = holdDurationProvider ?? healingHoldDurationProvider
+        self.urgentHoldDurationProvider = holdDurationProvider ?? urgentHoldDurationProvider
+        self.regularHoldDurationProvider = holdDurationProvider ?? regularHoldDurationProvider
+        self.healingGapDurationProvider = gapDurationProvider ?? healingGapDurationProvider
+        self.urgentGapDurationProvider = gapDurationProvider ?? urgentGapDurationProvider
+        self.regularGapDurationProvider = gapDurationProvider ?? regularGapDurationProvider
+        self.keyUpRetryInterval = max(0.001, keyUpRetryInterval)
+        self.diagnosticLogger = diagnosticLogger
+        self.eventPoster = eventPoster ?? { keyCode, isKeyDown in
+            guard let event = CGEvent(
+                keyboardEventSource: source,
+                virtualKey: keyCode,
+                keyDown: isKeyDown
+            ) else {
+                return false
+            }
+
+            // Avoid leaking stale modifier state from combinedSessionState.
+            event.flags = []
+            event.post(tap: .cgSessionEventTap)
+            return true
+        }
+
+        stateQueue.setSpecific(key: stateQueueKey, value: ())
     }
 
-    private func randomKeyInterval() -> TimeInterval {
-        humanRandom(median: 0.08, spread: 0.3, min: 0.04, max: 0.2)
+    static func defaultHoldDuration(for priority: KeyPressPriority) -> TimeInterval {
+        switch priority {
+        case .healing:
+            return humanRandom(median: 0.050, spread: 0.15, min: 0.040, max: 0.060)
+        case .urgent:
+            return humanRandom(median: 0.055, spread: 0.20, min: 0.040, max: 0.075)
+        case .regular:
+            return humanRandom(median: 0.070, spread: 0.25, min: 0.040, max: 0.100)
+        }
     }
 
-    private var canPressKey: Bool {
-        Date().timeIntervalSince(lastKeyPressTime) >= currentMinimumInterval
+    static func defaultGapDuration(for priority: KeyPressPriority) -> TimeInterval {
+        switch priority {
+        case .healing:
+            return humanRandom(median: 0.015, spread: 0.20, min: 0.008, max: 0.025)
+        case .urgent:
+            return humanRandom(median: 0.025, spread: 0.25, min: 0.015, max: 0.045)
+        case .regular:
+            return humanRandom(median: 0.050, spread: 0.30, min: 0.030, max: 0.090)
+        }
     }
 
-    /// Map of key names to CGKeyCode
+    deinit {
+        cancelAll()
+    }
+
+    /// Map of key names to CGKeyCode.
     private let keyCodeMap: [String: CGKeyCode] = [
         // Function keys
         "f1": CGKeyCode(kVK_F1),
@@ -70,47 +292,367 @@ class KeyPressService {
         "shift": CGKeyCode(kVK_Shift),
     ]
 
-    /// Press a key by name (e.g., "F1", "x", "[")
-    /// Key-down, hold, and key-up all happen on the calling thread for reliable game registration.
-    /// - Parameter urgent: When true, bypasses the global cooldown (used by healer)
-    /// - Returns: true if the key was actually sent, false if blocked
+    /// Enqueues a key press and returns immediately.
+    /// Higher-priority pending requests are selected first, but never interrupt an active key hold.
+    /// - Returns: `true` when the request was accepted, or `false` for an unknown key or while stopped.
     @discardableResult
-    func pressKey(_ key: String, urgent: Bool = false) -> Bool {
-        guard urgent || canPressKey else {
-            return false
-        }
-
+    func pressKey(
+        _ key: String,
+        priority: KeyPressPriority,
+        group: KeyPressRequestGroup?,
+        validUntil: TimeInterval?,
+        lifecycle: KeyPressLifecycleHandler?
+    ) -> Bool {
         let normalizedKey = key.lowercased()
-
+        let requestID = UUID()
         guard let keyCode = keyCodeMap[normalizedKey] else {
             print("⚠️ Unknown key: \(key)")
+            emit(
+                requestID: requestID,
+                key: key,
+                priority: priority,
+                phase: .failed,
+                queuedAt: ProcessInfo.processInfo.systemUptime,
+                validUntil: validUntil,
+                lifecycle: lifecycle
+            )
             return false
         }
 
-        // Create events from the persistent source
-        guard let keyDown = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: false) else {
-            print("❌ Failed to create key events for: \(key)")
-            return false
+        return withState {
+            let queuedAt = ProcessInfo.processInfo.systemUptime
+            guard acceptsRequests else {
+                emit(
+                    requestID: requestID,
+                    key: key,
+                    priority: priority,
+                    phase: .failed,
+                    queuedAt: queuedAt,
+                    validUntil: validUntil,
+                    lifecycle: lifecycle
+                )
+                return false
+            }
+
+            let request = KeyRequest(
+                id: requestID,
+                name: key,
+                keyCode: keyCode,
+                priority: priority,
+                group: group,
+                queuedAt: queuedAt,
+                validUntil: validUntil,
+                lifecycle: lifecycle
+            )
+            switch priority {
+            case .healing:
+                healingRequests.append(request)
+            case .urgent:
+                urgentRequests.append(request)
+            case .regular:
+                regularRequests.append(request)
+            }
+            emit(request, phase: .queued)
+            scheduleNextRequestIfNeeded()
+            return true
+        }
+    }
+
+    /// Removes requests belonging to one feature if they have not posted keyDown yet.
+    /// The currently active key is intentionally allowed to finish.
+    func cancelPendingRequests(in group: KeyPressRequestGroup) {
+        withState {
+            cancelRequests(in: &healingRequests) { $0.group == group }
+            cancelRequests(in: &urgentRequests) { $0.group == group }
+            cancelRequests(in: &regularRequests) { $0.group == group }
+        }
+    }
+
+    /// Stops accepting input and removes every request that has not posted keyDown yet.
+    /// Releasing an active key starts immediately and is retried after temporary posting failures.
+    func cancelAll() {
+        withState {
+            acceptsRequests = false
+            cancelRequests(in: &healingRequests) { _ in true }
+            cancelRequests(in: &urgentRequests) { _ in true }
+            cancelRequests(in: &regularRequests) { _ in true }
+            startGeneration += 1
+            scheduledStart?.cancel()
+            scheduledStart = nil
+            clearGate()
+
+            if let activeRequest {
+                activeTransitionGeneration += 1
+                scheduledActiveTransition?.cancel()
+                scheduledActiveTransition = nil
+                attemptKeyUp(for: activeRequest, shouldLogHold: false)
+            }
+        }
+    }
+
+    /// Allows new input after `cancelAll()`.
+    func resume() {
+        withState {
+            acceptsRequests = true
+            scheduleNextRequestIfNeeded()
+        }
+    }
+
+    private func scheduleNextRequestIfNeeded() {
+        guard acceptsRequests,
+              activeRequest == nil,
+              scheduledStart == nil,
+              let priority = nextPendingPriority else {
+            return
         }
 
-        // Clear modifier flags — prevents stale shift/ctrl/alt from combinedSessionState
-        // leaking into our synthetic presses
-        keyDown.flags = []
-        keyUp.flags = []
+        if let gate = postKeyUpGate {
+            let now = ProcessInfo.processInfo.systemUptime
+            if now < gate.validUntil, !priority.canBypassGate(after: gate.priority) {
+                scheduleGateExpiryIfNeeded(at: gate.validUntil)
+                return
+            }
+            clearGate()
+        }
 
-        // Complete key press on the same thread: down → hold → up
-        keyDown.post(tap: .cgSessionEventTap)
+        startGeneration += 1
+        let generation = startGeneration
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.startGeneration == generation else { return }
+            self.scheduledStart = nil
+            self.beginNextRequest()
+        }
+        scheduledStart = workItem
+        stateQueue.async(execute: workItem)
+    }
 
-        let holdTime = UInt32(humanRandom(median: 80000, spread: 0.3, min: 30000, max: 250000))
-        usleep(holdTime)
+    private func beginNextRequest() {
+        guard acceptsRequests, activeRequest == nil else { return }
 
-        keyUp.post(tap: .cgSessionEventTap)
+        let request: KeyRequest
+        if !healingRequests.isEmpty {
+            request = healingRequests.removeFirst()
+        } else if !urgentRequests.isEmpty {
+            request = urgentRequests.removeFirst()
+        } else if !regularRequests.isEmpty {
+            request = regularRequests.removeFirst()
+        } else {
+            return
+        }
 
-        lastKeyPressTime = Date()
-        currentMinimumInterval = randomKeyInterval()
+        if let validUntil = request.validUntil,
+           ProcessInfo.processInfo.systemUptime >= validUntil {
+            emit(request, phase: .cancelled)
+            scheduleNextRequestIfNeeded()
+            return
+        }
 
-        print("⌨️ Pressed key: \(key) (hold: \(holdTime/1000)ms)")
-        return true
+        let holdDuration = max(0, holdDurationProvider(for: request.priority)())
+        let gapDuration = max(0, gapDurationProvider(for: request.priority)())
+
+        // This is intentionally the last check before posting keyDown. Equality is expired.
+        if let validUntil = request.validUntil,
+           ProcessInfo.processInfo.systemUptime >= validUntil {
+            emit(request, phase: .cancelled)
+            scheduleNextRequestIfNeeded()
+            return
+        }
+
+        guard eventPoster(request.keyCode, true) else {
+            print("❌ Failed to create key-down event for: \(request.name)")
+            emit(request, phase: .failed)
+            scheduleNextRequestIfNeeded()
+            return
+        }
+
+        let activeRequest = ActiveRequest(
+            request: request,
+            holdDuration: holdDuration,
+            gapDuration: gapDuration
+        )
+        self.activeRequest = activeRequest
+        emit(request, phase: .keyDown)
+        didLogKeyUpFailure = false
+        scheduleActiveTransition(after: holdDuration) { [weak self] in
+            self?.finishHold(for: activeRequest)
+        }
+    }
+
+    private func finishHold(for activeRequest: ActiveRequest) {
+        guard self.activeRequest?.request.id == activeRequest.request.id else { return }
+
+        attemptKeyUp(for: activeRequest, shouldLogHold: true)
+    }
+
+    private func attemptKeyUp(for activeRequest: ActiveRequest, shouldLogHold: Bool) {
+        let request = activeRequest.request
+        guard self.activeRequest?.request.id == request.id else { return }
+
+        if !eventPoster(request.keyCode, false) {
+            if !didLogKeyUpFailure {
+                print("❌ Failed to create key-up event for: \(request.name), retrying")
+                didLogKeyUpFailure = true
+            }
+            scheduleActiveTransition(after: keyUpRetryInterval) { [weak self] in
+                self?.attemptKeyUp(for: activeRequest, shouldLogHold: shouldLogHold)
+            }
+            return
+        }
+        self.activeRequest = nil
+        if acceptsRequests {
+            beginGate(after: request.priority, duration: activeRequest.gapDuration)
+        }
+        emit(request, phase: .keyUp)
+        didLogKeyUpFailure = false
+
+        if shouldLogHold {
+            print("⌨️ Pressed key: \(request.name) (hold: \(Int(activeRequest.holdDuration * 1_000))ms)")
+        }
+
+        guard acceptsRequests else { return }
+        scheduleNextRequestIfNeeded()
+    }
+
+    private var nextPendingPriority: KeyPressPriority? {
+        if !healingRequests.isEmpty { return .healing }
+        if !urgentRequests.isEmpty { return .urgent }
+        if !regularRequests.isEmpty { return .regular }
+        return nil
+    }
+
+    private func holdDurationProvider(for priority: KeyPressPriority) -> DelayProvider {
+        switch priority {
+        case .healing: return healingHoldDurationProvider
+        case .urgent: return urgentHoldDurationProvider
+        case .regular: return regularHoldDurationProvider
+        }
+    }
+
+    private func gapDurationProvider(for priority: KeyPressPriority) -> DelayProvider {
+        switch priority {
+        case .healing: return healingGapDurationProvider
+        case .urgent: return urgentGapDurationProvider
+        case .regular: return regularGapDurationProvider
+        }
+    }
+
+    private func beginGate(after priority: KeyPressPriority, duration: TimeInterval) {
+        clearGate()
+        guard duration > 0 else { return }
+        postKeyUpGate = PostKeyUpGate(
+            priority: priority,
+            validUntil: ProcessInfo.processInfo.systemUptime + duration
+        )
+    }
+
+    private func scheduleGateExpiryIfNeeded(at deadline: TimeInterval) {
+        guard scheduledGateTransition == nil else { return }
+        let delay = max(0, deadline - ProcessInfo.processInfo.systemUptime)
+        gateTransitionGeneration += 1
+        let generation = gateTransitionGeneration
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.gateTransitionGeneration == generation else { return }
+            self.scheduledGateTransition = nil
+            self.postKeyUpGate = nil
+            self.scheduleNextRequestIfNeeded()
+        }
+        scheduledGateTransition = workItem
+        stateQueue.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func clearGate() {
+        gateTransitionGeneration += 1
+        scheduledGateTransition?.cancel()
+        scheduledGateTransition = nil
+        postKeyUpGate = nil
+    }
+
+    private func scheduleActiveTransition(after delay: TimeInterval, action: @escaping () -> Void) {
+        activeTransitionGeneration += 1
+        let generation = activeTransitionGeneration
+        scheduledActiveTransition?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.activeTransitionGeneration == generation else { return }
+            self.scheduledActiveTransition = nil
+            action()
+        }
+        scheduledActiveTransition = workItem
+        stateQueue.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func withState<T>(_ action: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: stateQueueKey) != nil {
+            return action()
+        }
+        return stateQueue.sync(execute: action)
+    }
+
+    private func cancelRequests(
+        in requests: inout [KeyRequest],
+        where shouldCancel: (KeyRequest) -> Bool
+    ) {
+        let cancelled = requests.filter(shouldCancel)
+        requests.removeAll(where: shouldCancel)
+        cancelled.forEach { emit($0, phase: .cancelled) }
+    }
+
+    private func emit(_ request: KeyRequest, phase: KeyPressLifecyclePhase) {
+        emit(
+            requestID: request.id,
+            key: request.name,
+            priority: request.priority,
+            phase: phase,
+            queuedAt: request.queuedAt,
+            validUntil: request.validUntil,
+            lifecycle: request.lifecycle
+        )
+    }
+
+    private func emit(
+        requestID: UUID,
+        key: String,
+        priority: KeyPressPriority,
+        phase: KeyPressLifecyclePhase,
+        queuedAt: TimeInterval,
+        validUntil: TimeInterval?,
+        lifecycle: KeyPressLifecycleHandler?
+    ) {
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        let validityRemaining = phase == .keyDown
+            ? validUntil.map { max(0, $0 - timestamp) }
+            : nil
+        let event = KeyPressLifecycleEvent(
+            requestID: requestID,
+            key: key,
+            priority: priority,
+            phase: phase,
+            timestamp: timestamp,
+            queueWait: max(0, timestamp - queuedAt),
+            validityRemaining: validityRemaining
+        )
+        lifecycle?(event)
+        var fields: [String: DiagnosticLogValue] = [
+            "key": .string(key),
+            "priority": .string(priority.rawValue),
+            "queueWaitMs": .double(event.queueWait * 1_000),
+            "requestID": .string(requestID.uuidString),
+            "meaning": .string(
+                phase == .keyDown ? "input sent, cast not confirmed" : "input lifecycle"
+            ),
+        ]
+        if let validityRemaining {
+            let validityRemainingMs = validityRemaining * 1_000
+            fields["validityRemainingMs"] = .double(validityRemainingMs)
+            if priority == .healing {
+                fields["frameToKeyDownMs"] = .double(max(0, 250 - validityRemainingMs))
+            }
+        }
+        diagnosticLogger?.log("input_\(phase.rawValue)", fields: fields)
+    }
+}
+
+private extension KeyPressPriority {
+    func canBypassGate(after precedingPriority: KeyPressPriority) -> Bool {
+        self == .healing || (self == .urgent && precedingPriority == .regular)
     }
 }

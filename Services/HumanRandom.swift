@@ -1,6 +1,6 @@
 import Foundation
 
-/// Human-like random timing using log-normal distribution.
+/// Random timing jitter using a log-normal distribution.
 /// Produces right-skewed values: most near the median, occasional longer outliers —
 /// matching real human reaction time distributions.
 func humanRandom(median: Double, spread: Double = 0.3) -> Double {
@@ -17,7 +17,7 @@ func humanRandom(median: Double, spread: Double = 0.3) -> Double {
     return max(median * 0.5, min(median * 3.0, value))
 }
 
-/// Clamped human random — convenience for when you need hard bounds
+/// Clamped random timing convenience for callers that need hard bounds.
 func humanRandom(median: Double, spread: Double = 0.3, min minVal: Double, max maxVal: Double) -> Double {
     let value = humanRandom(median: median, spread: spread)
     return max(minVal, min(maxVal, value))

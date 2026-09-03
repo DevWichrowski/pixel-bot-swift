@@ -1,245 +1,142 @@
 import Foundation
-import CoreGraphics
-import Vision
 
-class AmmoReader {
-    
+struct AmmoFrameReadout: Sendable {
+    let readout: NumericReadout
+    let confirmedCurrent: Int?
+    let generation: UInt64
+}
+
+final class AmmoReader: @unchecked Sendable {
+    private let lock = NSLock()
+    private let processingLock = NSLock()
+    private var captureRegion: CaptureRegion?
+    private var expectedGeneration: UInt64 = 0
+    private var pipeline: NumericRegionOCRPipeline
+    private var pendingDecreaseEvents = 0
+
     var debugMode = false
-    
-    private var region: CGRect?
-    private var lastAmmoValue: Int?
-    private var currentAmmoValue: Int?
-    private var lastImageHash: Int = 0
-    
-    // Reuse the request to avoid overhead
-    private lazy var recognitionRequest: VNRecognizeTextRequest = {
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .fast
-        request.usesLanguageCorrection = false
-        request.minimumTextHeight = 0.1
-        if #available(macOS 13.0, *) {
-            request.revision = VNRecognizeTextRequestRevision3
-        }
-        return request
-    }()
-    
-    func setRegion(_ rect: (x: Int, y: Int, width: Int, height: Int)) {
-        region = CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
-        lastAmmoValue = nil
-        currentAmmoValue = nil
-        lastImageHash = 0
-        if debugMode {
-            print("🏹 Ammo region set: (x: \(rect.x), y: \(rect.y), width: \(rect.width), height: \(rect.height))")
+
+    init(
+        mode: OCRPipelineMode = .realtime,
+        recognizer: OCRTextRecognizing = VisionTextRecognizer()
+    ) {
+        pipeline = NumericRegionOCRPipeline(
+            format: .singleValue,
+            mode: mode,
+            recognizer: recognizer
+        )
+    }
+
+    var generation: UInt64 {
+        lock.withLock { expectedGeneration }
+    }
+
+    func region() -> CaptureRegion? {
+        lock.withLock { captureRegion }
+    }
+
+    func setRegion(_ region: CaptureRegion?, generation: UInt64) {
+        lock.withLock {
+            captureRegion = region
+            expectedGeneration = generation
+            pendingDecreaseEvents = 0
+            pipeline.reset(configured: region != nil)
         }
     }
-    
+
+    /// Compatibility bridge for persisted integer tuples.
+    func setRegion(_ region: (x: Int, y: Int, width: Int, height: Int)) {
+        lock.withLock {
+            captureRegion = CaptureRegion(region)
+            expectedGeneration &+= 1
+            pendingDecreaseEvents = 0
+            pipeline.reset(configured: captureRegion != nil)
+        }
+    }
+
     func hasValidRegion() -> Bool {
-        return region != nil
+        lock.withLock { captureRegion != nil }
     }
-    
-    func readAmmo(from screenImage: CGImage) {
-        guard let region = region else { return }
-        
-        let x = Int(region.origin.x)
-        let y = Int(region.origin.y)
-        let width = Int(region.size.width)
-        let height = Int(region.size.height)
-        
-        guard x >= 0 && y >= 0 && 
-              x + width <= screenImage.width && 
-              y + height <= screenImage.height else {
-            return
+
+    /// Commits only if region and generation did not change while Vision was running.
+    func process(_ frame: CapturedFrame, now: Date = Date()) -> AmmoFrameReadout? {
+        processingLock.lock()
+        defer { processingLock.unlock() }
+
+        let snapshot: (region: CaptureRegion, pipeline: NumericRegionOCRPipeline)? = lock.withLock {
+            guard frame.generation == expectedGeneration, let captureRegion else { return nil }
+            return (captureRegion, pipeline)
         }
-        
-        guard let croppedImage = screenImage.cropping(to: CGRect(x: x, y: y, width: width, height: height)) else {
-            return
-        }
-        
-        // OPTIMIZATION: Check if image changed using a fast hash before running expensive OCR
-        let currentHash = computeFastHash(croppedImage)
-        if currentHash == lastImageHash {
-            // Image is identical to last frame, no need to re-run OCR
-            return
-        }
-        lastImageHash = currentHash
-        
-        if let ammo = performOCR(on: croppedImage, label: debugMode ? "Ammo" : nil) {
-            lastAmmoValue = currentAmmoValue
-            currentAmmoValue = ammo
-            
-            if debugMode {
-                 if let last = lastAmmoValue, let current = currentAmmoValue, last != current {
-                     print("🏹 Ammo changed: \(last) → \(current)")
-                 } else if lastAmmoValue == nil {
-                     print("🏹 Ammo initial: \(ammo)")
-                 }
-            }
-        }
-    }
-    
-    func checkAmmoDecrease() -> Bool {
-        guard let last = lastAmmoValue, let current = currentAmmoValue else {
-            return false
-        }
-        let isValid = current >= 0 && current <= 2000 && last >= 0 && last <= 2000
-        return isValid && current < last
-    }
-    
-    func reset() {
-        lastAmmoValue = nil
-        currentAmmoValue = nil
-        lastImageHash = 0
-    }
-    
-    private func computeFastHash(_ image: CGImage) -> Int {
-        guard let dataProvider = image.dataProvider,
-              let data = dataProvider.data else {
-            return 0
-        }
-        // Simple hash of raw bytes
-        let pointer = CFDataGetBytePtr(data)!
-        let length = CFDataGetLength(data)
-        
-        var hash = 5381
-        // Skipping bytes for speed is fine for detecting if screen changed
-        // Step 4 = check every pixel (since 4 bytes per pixel) roughly
-        let step = 4 
-        
-        for i in stride(from: 0, to: length, by: step) {
-            hash = ((hash << 5) &+ hash) &+ Int(pointer[i])
-        }
-        return hash
-    }
-    
-    private func preprocessImage(_ image: CGImage) -> CGImage {
-        let width = image.width
-        let height = image.height
-        
-        // Scale up
-        let scale = 6 // Reduced from 8 to 6 for slight perf gain, usually enough
-        let newWidth = width * scale
-        let newHeight = height * scale
-        
-        guard let context = CGContext(
-            data: nil,
-            width: newWidth,
-            height: newHeight,
-            bitsPerComponent: 8,
-            bytesPerRow: newWidth * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            return image
-        }
-        
-        context.interpolationQuality = .high
-        context.draw(image, in: CGRect(x: 0, y: 0, width: newWidth, height: newHeight))
-        
-        guard let scaledImage = context.makeImage(),
-              let dataProvider = scaledImage.dataProvider,
-              let data = dataProvider.data else {
-            return image
-        }
-        
-        let pointer = CFDataGetBytePtr(data)!
-        let length = CFDataGetLength(data)
-        var outputData = [UInt8](repeating: 255, count: length)
-        
-        // COLOR FILTERING
-        // Target: RGB(191, 191, 191) with tolerance
-        
-        for i in stride(from: 0, to: length, by: 4) {
-            let r = Int(pointer[i])
-            let g = Int(pointer[i + 1])
-            let b = Int(pointer[i + 2])
-            
-            let isTargetGray = abs(r - 191) < 40 && 
-                               abs(g - 191) < 40 && 
-                               abs(b - 191) < 40 &&
-                               abs(r - g) < 20 &&
-                               abs(g - b) < 20
-            
-            if isTargetGray {
-                outputData[i] = 0
-                outputData[i + 1] = 0
-                outputData[i + 2] = 0
-                outputData[i + 3] = 255
-            }
-        }
-        
-        let outputPtr = UnsafeMutablePointer<UInt8>.allocate(capacity: length)
-        outputPtr.initialize(from: &outputData, count: length)
-        
-        guard let outputContext = CGContext(
-            data: outputPtr,
-            width: newWidth,
-            height: newHeight,
-            bitsPerComponent: 8,
-            bytesPerRow: newWidth * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            outputPtr.deallocate()
-            return image
-        }
-        
-        let result = outputContext.makeImage() ?? image
-        outputPtr.deallocate()
-        return result
-    }
-    
-    private func performOCR(on image: CGImage, label: String? = nil) -> Int? {
-        let processedImage = preprocessImage(image)
-        let handler = VNImageRequestHandler(cgImage: processedImage, options: [:])
-        
-        do {
-            try handler.perform([recognitionRequest])
-            
-            guard let results = recognitionRequest.results, !results.isEmpty else {
-                if let label = label {
-                    /* print("🔍 \(label) OCR: No results") */
-                }
+        guard var snapshot else { return nil }
+
+        let previousCurrent = snapshot.pipeline.readout(at: now).current
+        let result = snapshot.pipeline.process(frame: frame, region: snapshot.region, now: now)
+
+        return lock.withLock {
+            guard expectedGeneration == frame.generation,
+                  captureRegion == snapshot.region else {
                 return nil
             }
-            
-            var allTexts: [String] = []
-            for observation in results {
-                if let text = observation.topCandidates(1).first?.string {
-                    allTexts.append(text)
-                }
+
+            pipeline = snapshot.pipeline
+            if let previousCurrent,
+               let confirmedCurrent = result.confirmedCurrent,
+               confirmedCurrent < previousCurrent {
+                pendingDecreaseEvents += 1
             }
-            
-            if let label = label {
-                /* print("🔍 \(label) OCR raw: \(allTexts)") */
+
+            return AmmoFrameReadout(
+                readout: pipeline.readout(at: now),
+                confirmedCurrent: result.confirmedCurrent,
+                generation: frame.generation
+            )
+        }
+    }
+
+    func readout(at date: Date = Date()) -> NumericReadout {
+        lock.withLock { pipeline.readout(at: date) }
+    }
+
+    func diagnostic(at date: Date = Date()) -> RegionDiagnostic {
+        lock.withLock { pipeline.diagnostic(at: date) }
+    }
+
+    /// Returns one pending edge event and removes exactly that event.
+    func consumeDecreaseEvent() -> Bool {
+        lock.withLock {
+            guard pendingDecreaseEvents > 0 else { return false }
+            pendingDecreaseEvents -= 1
+            return true
+        }
+    }
+
+    /// Compatibility name. Unlike the old level check, this consumes the event.
+    func checkAmmoDecrease() -> Bool {
+        consumeDecreaseEvent()
+    }
+
+    func reset(generation: UInt64? = nil) {
+        lock.withLock {
+            if let generation {
+                expectedGeneration = generation
+            } else {
+                expectedGeneration &+= 1
             }
-            
-            for text in allTexts {
-                let cleaned = text
-                    .replacingOccurrences(of: "O", with: "0")
-                    .replacingOccurrences(of: "o", with: "0")
-                    .replacingOccurrences(of: "I", with: "1")
-                    .replacingOccurrences(of: "l", with: "1")
-                    .replacingOccurrences(of: "i", with: "1")
-                    .replacingOccurrences(of: "B", with: "8")
-                    .replacingOccurrences(of: "S", with: "5")
-                    .replacingOccurrences(of: ",", with: "")
-                    .replacingOccurrences(of: ".", with: "")
-                    .replacingOccurrences(of: " ", with: "")
-                
-                let digits = cleaned.filter { $0.isNumber }
-                
-                if let value = Int(digits) {
-                    if let label = label {
-                        /* print("✅ \(label) parsed: \(value)") */
-                    }
-                    return value
-                }
+            pendingDecreaseEvents = 0
+            pipeline.reset(configured: captureRegion != nil)
+        }
+    }
+
+    func clearRegion(generation: UInt64? = nil) {
+        lock.withLock {
+            captureRegion = nil
+            if let generation {
+                expectedGeneration = generation
+            } else {
+                expectedGeneration &+= 1
             }
-            
-            return nil
-            
-        } catch {
-            return nil
+            pendingDecreaseEvents = 0
+            pipeline.reset(configured: false)
         }
     }
 }

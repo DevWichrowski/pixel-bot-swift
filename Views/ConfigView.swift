@@ -1,252 +1,520 @@
 import SwiftUI
 
-/// Config tab for regions and hotkeys
+/// Configuration grouped into focused, collapsible sections.
 struct ConfigView: View {
     @ObservedObject var bot: TibiaBot
-    
+
+    @State private var regionsExpanded = true
+    @State private var healingExpanded = false
+    @State private var cooldownsExpanded = false
+    @State private var hotkeysExpanded = false
+    @State private var comboExpanded = false
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 8) {
-                // Regions Section
-                SectionHeader(title: "REGIONS", icon: "◎")
-                
-                PixelArtPanel {
-                    VStack(spacing: 8) {
-                        // HP Region
-                        HStack {
-                            Text("\(Theme.Icons.hp) HP Region")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(Theme.hp)
-                            
-                            Spacer()
-                            
-                            PixelButton("SELECT", color: Theme.accent) {
-                                bot.selectHPRegion()
-                            }
-                        }
-                        
-                        Text(bot.hpRegionStatus)
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundColor(Theme.textDim)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        
-                        // Mana Region
-                        HStack {
-                            Text("\(Theme.Icons.mana) Mana Region")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(Theme.mana)
-                            
-                            Spacer()
-                            
-                            PixelButton("SELECT", color: Theme.accent) {
-                                bot.selectManaRegion()
-                            }
-                        }
-                        
-                        Text(bot.manaRegionStatus)
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundColor(Theme.textDim)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        
-                        // Ammo Region (for Paladin Combo)
-                        HStack {
-                            Text("🏹 Ammo Region")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(Theme.success)
-                            
-                            Spacer()
-                            
-                            PixelButton("SELECT", color: Theme.accent) {
-                                bot.selectAmmoRegion()
-                            }
-                        }
-                        
-                        Text(bot.ammoRegionStatus)
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundColor(Theme.textDim)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(spacing: 5) {
+                CollapsibleSection(
+                    title: "Regions",
+                    icon: "◎",
+                    tint: Theme.accent,
+                    isExpanded: $regionsExpanded
+                ) {
+                    VStack(spacing: 6) {
+                        RegionDiagnosticCard(
+                            title: "Health",
+                            icon: Theme.Icons.hp,
+                            tint: Theme.hp,
+                            regionStatus: bot.hpRegionStatus,
+                            diagnostic: bot.hpDiagnostic,
+                            screenRecordingGranted: bot.screenRecordingGranted,
+                            selectAction: bot.selectHPRegion,
+                            refreshAction: { bot.refreshDiagnostic(kind: .hp) }
+                        )
+
+                        RegionDiagnosticCard(
+                            title: "Mana",
+                            icon: Theme.Icons.mana,
+                            tint: Theme.mana,
+                            regionStatus: bot.manaRegionStatus,
+                            diagnostic: bot.manaDiagnostic,
+                            screenRecordingGranted: bot.screenRecordingGranted,
+                            selectAction: bot.selectManaRegion,
+                            refreshAction: { bot.refreshDiagnostic(kind: .mana) }
+                        )
+
+                        RegionDiagnosticCard(
+                            title: "Ammo",
+                            icon: "🏹",
+                            tint: Theme.success,
+                            regionStatus: bot.ammoRegionStatus,
+                            diagnostic: bot.ammoDiagnostic,
+                            screenRecordingGranted: bot.screenRecordingGranted,
+                            selectAction: bot.selectAmmoRegion,
+                            refreshAction: { bot.refreshDiagnostic(kind: .ammo) }
+                        )
                     }
                 }
-                
-                // Food Section
-                SectionHeader(title: "FOOD", icon: Theme.Icons.eater)
-                
-                PixelArtPanel {
+
+                CollapsibleSection(
+                    title: "Healing",
+                    icon: Theme.Icons.heal,
+                    tint: Theme.hp,
+                    isExpanded: $healingExpanded
+                ) {
                     VStack(spacing: 4) {
-                        HStack {
-                            Text("Type:")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(Theme.text)
-                            
-                            Spacer()
-                            
-                            Picker("", selection: $bot.foodType) {
-                                Text("Fire Mushroom").tag("fire_mushroom")
-                                Text("Brown Mushroom").tag("brown_mushroom")
-                            }
-                            .pickerStyle(.menu)
-                            .frame(width: 140)
-                        }
-                        
-                        HStack {
-                            Text("Key:")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(Theme.text)
-                            
-                            Spacer()
-                            
-                            TextField("", text: $bot.eaterHotkey)
-                                .font(.system(size: 10, design: .monospaced))
-                                .frame(width: 50, height: 20)
-                                .textFieldStyle(.roundedBorder)
-                                .multilineTextAlignment(.center)
-                        }
-                    }
-                }
-                
-                // Potion Mode Section
-                SectionHeader(title: "POTION MODE", icon: Theme.Icons.critical)
-                
-                PixelArtPanel {
-                    VStack(spacing: 4) {
+                        ThresholdRow(
+                            label: "Heal",
+                            icon: Theme.Icons.heal,
+                            color: Theme.hp,
+                            isOn: $bot.healEnabled,
+                            threshold: $bot.healThreshold
+                        )
+                        ThresholdRow(
+                            label: "Critical",
+                            icon: Theme.Icons.critical,
+                            color: Theme.error,
+                            isOn: $bot.criticalEnabled,
+                            threshold: $bot.criticalThreshold
+                        )
+                        ThresholdRow(
+                            label: "Mana",
+                            icon: Theme.Icons.mana,
+                            color: Theme.mana,
+                            isOn: $bot.manaEnabled,
+                            threshold: $bot.manaThreshold
+                        )
+                        ThresholdRow(
+                            label: "Spirit",
+                            icon: "🧪",
+                            color: Theme.success,
+                            isOn: $bot.spiritPotionHeal,
+                            threshold: $bot.spiritPotionThreshold
+                        )
+
+                        Divider()
+                            .overlay(Theme.borderMid)
+                            .padding(.vertical, 4)
+
                         ToggleRow(
-                            label: "Crit is Potion",
+                            label: "Critical uses potion",
                             icon: Theme.Icons.critical,
                             color: Theme.error,
                             isOn: $bot.criticalIsPotion
                         )
-                        
-                        Text("Priority: Crit > Mana")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundColor(Theme.textDim)
-                            .padding(.leading, 16)
-                        
-                        Divider().background(Theme.textDim)
-                        
-                        HotkeyRow(label: "🧪 Spirit Key:", hotkey: $bot.spiritPotionHotkey)
-                        
-                        Divider().background(Theme.textDim)
-                        
-                        // Cooldown settings
-                        HStack {
-                            Text("⏱ Spell CD:")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(Theme.text)
-                            
-                            Spacer()
-                            
-                            TextField("", text: $bot.spellCooldown)
-                                .font(.system(size: 10, design: .monospaced))
-                                .frame(width: 50, height: 20)
-                                .textFieldStyle(.roundedBorder)
-                                .multilineTextAlignment(.center)
-                            
-                            Text("s")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(Theme.textDim)
-                        }
-                        
-                        HStack {
-                            Text("⏱ Potion CD:")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(Theme.text)
-                            
-                            Spacer()
-                            
-                            TextField("", text: $bot.potionCooldown)
-                                .font(.system(size: 10, design: .monospaced))
-                                .frame(width: 50, height: 20)
-                                .textFieldStyle(.roundedBorder)
-                                .multilineTextAlignment(.center)
-                            
-                            Text("s")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(Theme.textDim)
-                        }
+
+                        Text("Potion priority: Critical, then Mana")
+                            .font(Theme.utilityFont())
+                            .foregroundStyle(Theme.textDim)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 22)
                     }
                 }
-                
-                // Hotkeys Section
-                SectionHeader(title: "HOTKEYS", icon: "♪")
-                
-                PixelArtPanel {
+
+                CollapsibleSection(
+                    title: "Cooldowns",
+                    icon: "⏱",
+                    tint: Theme.gold,
+                    isExpanded: $cooldownsExpanded
+                ) {
                     VStack(spacing: 4) {
-                        HotkeyRow(label: "\(Theme.Icons.heal) Heal:", hotkey: $bot.healHotkey)
-                        HotkeyRow(label: "\(Theme.Icons.critical) Crit:", hotkey: $bot.criticalHotkey)
-                        HotkeyRow(label: "\(Theme.Icons.mana) Mana:", hotkey: $bot.manaHotkey)
-                        HotkeyRow(label: "\(Theme.Icons.haste) Haste:", hotkey: $bot.hasteHotkey)
-                        HotkeyRow(label: "\(Theme.Icons.skinner) Skin:", hotkey: $bot.skinnerHotkey)
+                        HStack {
+                            Text("Healing group cooldown:")
+                                .font(Theme.utilityFont())
+                                .foregroundStyle(Theme.text)
+                            Spacer()
+                            Text("\(bot.healingGroupCooldownText) s")
+                                .font(Theme.dataFont())
+                                .foregroundStyle(Theme.textDim)
+                        }
+                        .frame(minHeight: 28)
+                        LabeledTextFieldRow(
+                            label: "Potion cooldown",
+                            text: $bot.potionCooldown,
+                            suffix: "s"
+                        )
                     }
                 }
-                
-                // Auto Combo Section
-                SectionHeader(title: "AUTO COMBO", icon: "⚔")
-                
-                PixelArtPanel {
+
+                CollapsibleSection(
+                    title: "Hotkeys",
+                    icon: "♪",
+                    tint: Theme.accent,
+                    isExpanded: $hotkeysExpanded
+                ) {
                     VStack(spacing: 4) {
-                        HotkeyRow(label: "⚔ Start/Stop:", hotkey: $bot.comboStartStopHotkey)
-                        HotkeyRow(label: "⚔ Combo Key:", hotkey: $bot.comboHotkey)
-                        
-                        Divider().background(Theme.textDim)
-                        
-                        // Utito Tempo Section
-                        HotkeyRow(label: "⚡ Utito Tempo:", hotkey: $bot.utitoTempoHotkey)
-                        
+                        HotkeyRow(label: "\(Theme.Icons.heal) Heal", hotkey: $bot.healHotkey)
+                        HotkeyRow(label: "\(Theme.Icons.critical) Critical", hotkey: $bot.criticalHotkey)
+                        HotkeyRow(label: "\(Theme.Icons.mana) Mana", hotkey: $bot.manaHotkey)
+                        HotkeyRow(label: "🧪 Spirit potion", hotkey: $bot.spiritPotionHotkey)
+                        HotkeyRow(label: "\(Theme.Icons.eater) Eater", hotkey: $bot.eaterHotkey)
+                        HotkeyRow(label: "\(Theme.Icons.haste) Haste", hotkey: $bot.hasteHotkey)
+                        HotkeyRow(label: "\(Theme.Icons.skinner) Skinner", hotkey: $bot.skinnerHotkey)
+
+                        Divider()
+                            .overlay(Theme.borderMid)
+                            .padding(.vertical, 4)
+
+                        ToggleRow(
+                            label: "Eater",
+                            icon: Theme.Icons.eater,
+                            color: Theme.eater,
+                            isOn: $bot.eaterEnabled
+                        )
+                        foodPicker
+                        ToggleRow(
+                            label: "Haste",
+                            icon: Theme.Icons.haste,
+                            color: Theme.haste,
+                            isOn: $bot.hasteEnabled
+                        )
+                        ToggleRow(
+                            label: "Skinner",
+                            icon: Theme.Icons.skinner,
+                            color: Theme.skinner,
+                            isOn: $bot.skinnerEnabled
+                        )
+                    }
+                }
+
+                CollapsibleSection(
+                    title: "Combo",
+                    icon: "⚔",
+                    tint: Theme.warning,
+                    isExpanded: $comboExpanded
+                ) {
+                    VStack(spacing: 4) {
+                        ToggleRow(
+                            label: "Auto Combo",
+                            icon: "⚔",
+                            color: Theme.warning,
+                            isOn: $bot.comboEnabled
+                        )
+                        HotkeyRow(label: "⚔ Start / stop", hotkey: $bot.comboStartStopHotkey)
+                        HotkeyRow(label: "⚔ Combo key", hotkey: $bot.comboHotkey)
+
+                        Divider()
+                            .overlay(Theme.borderMid)
+                            .padding(.vertical, 4)
+
                         ToggleRow(
                             label: "Utito Tempo",
                             icon: "⚡",
                             color: Theme.accent,
                             isOn: $bot.utitoTempoEnabled
                         )
-                        
+                        HotkeyRow(label: "⚡ Utito Tempo", hotkey: $bot.utitoTempoHotkey)
                         ToggleRow(
                             label: "Re-cast Utito",
                             icon: "🔄",
                             color: Theme.warning,
                             isOn: $bot.recastUtito
                         )
-                        
-                        Divider().background(Theme.textDim)
-                        
-                        // Paladin Combo Section
+
+                        Divider()
+                            .overlay(Theme.borderMid)
+                            .padding(.vertical, 4)
+
                         ToggleRow(
                             label: "Paladin Combo",
                             icon: "🏹",
                             color: Theme.success,
                             isOn: $bot.paladinComboEnabled
                         )
-                        
-                        Text("Trigger on ammo decrease")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundColor(Theme.textDim)
-                            .padding(.leading, 16)
-                        
-                        Divider().background(Theme.textDim)
-                        
+                        Text("Triggers once when the accepted ammo value decreases")
+                            .font(Theme.utilityFont())
+                            .foregroundStyle(Theme.textDim)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 22)
+
+                        Divider()
+                            .overlay(Theme.borderMid)
+                            .padding(.vertical, 4)
+
                         ToggleRow(
-                            label: "Loot on Stop",
+                            label: "Loot on stop",
                             icon: "📦",
                             color: Theme.success,
                             isOn: $bot.lootOnStop
                         )
-                        
-                        HotkeyRow(label: "📦 Loot Key:", hotkey: $bot.autoLootHotkey)
+                        HotkeyRow(label: "📦 Loot key", hotkey: $bot.autoLootHotkey)
                     }
                 }
-                
-                // Reset Button
-                HStack {
-                    Spacer()
-                    
-                    PixelButton("🔄 RESET CONFIG", color: Theme.warning) {
-                        bot.resetConfig()
-                    }
-                    
-                    Spacer()
+
+                PixelButton("🔄  RESET CONFIG", color: Theme.warning, fillWidth: true) {
+                    bot.resetConfig()
                 }
-                .padding(.top, 8)
+                .help("Restore default settings and clear all capture regions")
+                .padding(.top, 2)
             }
-            .padding(4)
+            .padding(6)
         }
+        .scrollIndicators(.hidden)
+        .background {
+            TibiaAssetImage(.stoneBackground, resizingMode: .tile)
+        }
+    }
+
+    private var foodPicker: some View {
+        HStack(spacing: 6) {
+            Text("Food type")
+                .font(Theme.utilityFont())
+                .foregroundStyle(Theme.text)
+
+            Spacer()
+
+            Picker("Food type", selection: $bot.foodType) {
+                Text("Fire Mushroom").tag("fire_mushroom")
+                Text("Brown Mushroom").tag("brown_mushroom")
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 154)
+            .padding(.horizontal, 4)
+            .frame(minHeight: 28)
+            .background(Theme.bgDark)
+            .tibiaFrame(.fieldFrame, insets: EdgeInsets(top: 11, leading: 11, bottom: 11, trailing: 11))
+            .accessibilityLabel("Food type")
+            .help("Choose the food used by Auto Eater")
+        }
+        .frame(minHeight: 26)
+    }
+}
+
+private struct RegionDiagnosticCard: View {
+    let title: String
+    let icon: String
+    let tint: Color
+    let regionStatus: String
+    let diagnostic: RegionDiagnostic?
+    let screenRecordingGranted: Bool
+    let selectAction: () -> Void
+    let refreshAction: () -> Void
+
+    private var isConfigured: Bool {
+        if let diagnostic {
+            switch diagnostic.state {
+            case .unconfigured:
+                break
+            case .valid, .stale, .invalid:
+                return true
+            }
+        }
+
+        return regionStatus.hasPrefix(Theme.Icons.check)
+    }
+
+    private var diagnosticStateTitle: String {
+        guard let diagnostic else { return "Unconfigured" }
+        switch diagnostic.state {
+        case .valid: return "Fresh"
+        case .stale: return "Stale"
+        case .invalid: return "Invalid"
+        case .unconfigured: return "Unconfigured"
+        }
+    }
+
+    private var diagnosticStateColor: Color {
+        guard let diagnostic else { return Theme.textDim }
+        switch diagnostic.state {
+        case .valid: return Theme.success
+        case .stale: return Theme.warning
+        case .invalid: return Theme.error
+        case .unconfigured: return Theme.textDim
+        }
+    }
+
+    private var refreshHelp: String {
+        if !screenRecordingGranted {
+            return "Screen Recording permission is required before this test can run"
+        }
+        if !isConfigured {
+            return "Select the region before running an OCR test"
+        }
+        return "Read this region from the current stream frame, or perform a one-frame capture while stopped"
+    }
+
+    var body: some View {
+        TacticalInsetPanel {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 5) {
+                    TibiaSymbol(symbol: icon, tint: tint)
+                    Text("\(title) region")
+                        .font(Theme.headingFont())
+                        .foregroundStyle(Theme.textBright)
+
+                    Spacer()
+
+                    Text(diagnosticStateTitle.uppercased())
+                        .font(Theme.dataFont(weight: .bold))
+                        .foregroundStyle(diagnosticStateColor)
+                        .padding(.horizontal, 4)
+                        .frame(height: 20)
+                        .background(diagnosticStateColor.opacity(0.1))
+                        .overlay {
+                            Rectangle()
+                                .strokeBorder(diagnosticStateColor.opacity(0.55), lineWidth: 1)
+                        }
+                }
+
+                Text(isConfigured ? regionStatus : "Unconfigured")
+                    .font(Theme.dataFont())
+                    .foregroundStyle(Theme.textDim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if !screenRecordingGranted {
+                    Label(
+                        "Screen Recording permission is required to refresh this test.",
+                        systemImage: "lock.trianglebadge.exclamationmark"
+                    )
+                    .font(Theme.utilityFont())
+                    .foregroundStyle(Theme.error)
+                    .fixedSize(horizontal: false, vertical: true)
+                } else if !isConfigured {
+                    Text("Select a region to create an OCR diagnostic.")
+                        .font(Theme.utilityFont())
+                        .foregroundStyle(Theme.textDim)
+                }
+
+                HStack(spacing: 5) {
+                    DiagnosticThumbnail(
+                        title: "Raw",
+                        image: diagnostic?.rawImage,
+                        background: Theme.bgPanel
+                    )
+                    DiagnosticThumbnail(
+                        title: "Binary",
+                        image: diagnostic?.binaryImage,
+                        background: Color.white
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 5) {
+                    DiagnosticValueRow(
+                        label: "OCR",
+                        value: diagnosticText,
+                        valueColor: Theme.textBright
+                    )
+                    HStack(spacing: 6) {
+                        DiagnosticMetric(label: "Confidence", value: confidenceText)
+                        DiagnosticMetric(label: "Freshness", value: freshnessText)
+                        DiagnosticMetric(label: "Latency", value: latencyText)
+                    }
+                }
+
+                HStack(spacing: 5) {
+                    PixelButton("Select region", color: tint, fillWidth: true, compact: true, action: selectAction)
+                        .help("Select the \(title.lowercased()) readout on the main display")
+
+                    PixelButton("Refresh test", color: Theme.accent, fillWidth: true, compact: true, action: refreshAction)
+                        .disabled(!screenRecordingGranted || !isConfigured)
+                        .help(refreshHelp)
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(title) region diagnostic")
+    }
+
+    private var diagnosticText: String {
+        guard let text = diagnostic?.text, !text.isEmpty else { return "No OCR text" }
+        return text
+    }
+
+    private var confidenceText: String {
+        guard let diagnostic else { return "--" }
+        return String(format: "%.0f%%", Double(diagnostic.confidence) * 100)
+    }
+
+    private var freshnessText: String {
+        guard let freshness = diagnostic?.freshness else { return "Never" }
+        if freshness < 1 {
+            return String(format: "%.0f ms", freshness * 1_000)
+        }
+        return String(format: "%.1f s", freshness)
+    }
+
+    private var latencyText: String {
+        guard let diagnostic else { return "--" }
+        return String(format: "%.1f ms", diagnostic.latency * 1_000)
+    }
+}
+
+private struct DiagnosticThumbnail: View {
+    let title: String
+    let image: CGImage?
+    let background: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(Theme.utilityFont(weight: .medium))
+                .foregroundStyle(Theme.textDim)
+
+            Group {
+                if let image {
+                    Image(decorative: image, scale: 1)
+                        .resizable()
+                        .interpolation(.none)
+                        .scaledToFit()
+                } else {
+                    Image(systemName: "viewfinder")
+                        .font(.system(size: 18, weight: .light))
+                        .foregroundStyle(Theme.textDim.opacity(0.55))
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52)
+            .background(background)
+            .tibiaFrame(.fieldFrame, insets: EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title) region preview")
+        .accessibilityValue(image == nil ? "Unavailable" : "Available")
+    }
+}
+
+private struct DiagnosticValueRow: View {
+    let label: String
+    let value: String
+    let valueColor: Color
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Text(label)
+                .font(Theme.utilityFont())
+                .foregroundStyle(Theme.textDim)
+            Text(value)
+                .font(Theme.dataFont(weight: .semibold))
+                .foregroundStyle(valueColor)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(value)
+    }
+}
+
+private struct DiagnosticMetric: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .font(Theme.utilityFont())
+                .foregroundStyle(Theme.textDim)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text(value)
+                .font(Theme.dataFont(weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(value)
     }
 }

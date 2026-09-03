@@ -3,7 +3,10 @@ import Cocoa
 
 /// Auto Combo - presses combo key every 2-2.1 seconds when active
 class AutoCombo {
-    private let keyPress: KeyPressService
+    private let keyPress: any KeyPressServicing
+    private let keyPressGroup = KeyPressRequestGroup()
+    private let delayedActionQueue: DispatchQueue
+    private let lootDelayOverride: (() -> TimeInterval)?
     
     /// Combo hotkey to press
     var comboHotkey: String = "2"
@@ -61,16 +64,25 @@ class AutoCombo {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var isListening: Bool = false
+    private var lootWorkItem: DispatchWorkItem?
+    private var lootGeneration = 0
     
     /// UI callback
     var onActiveChanged: ((Bool) -> Void)?
     
-    init(keyPress: KeyPressService = .shared) {
+    init(
+        keyPress: any KeyPressServicing = KeyPressService.shared,
+        delayedActionQueue: DispatchQueue = .main,
+        lootDelayOverride: (() -> TimeInterval)? = nil
+    ) {
         self.keyPress = keyPress
+        self.delayedActionQueue = delayedActionQueue
+        self.lootDelayOverride = lootDelayOverride
         randomizeInterval()
     }
     
     deinit {
+        cancelPendingActions()
         stopListener()
     }
     
@@ -91,6 +103,12 @@ class AutoCombo {
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
                 guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 let combo = Unmanaged<AutoCombo>.fromOpaque(refcon).takeUnretainedValue()
+
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    combo.reenableEventTap()
+                    return Unmanaged.passUnretained(event)
+                }
+
                 if combo.enabled && type == .keyDown {
                     combo.handleKeyDown(event)
                 }
@@ -173,8 +191,10 @@ class AutoCombo {
         if enabled {
             startListener()
         } else {
+            cancelPendingActions()
             isActive = false
             onActiveChanged?(false)
+            stopListener()
         }
         print(enabled ? "⚔️ Auto Combo ENABLED" : "⚔️ Auto Combo DISABLED")
     }
@@ -186,16 +206,17 @@ class AutoCombo {
         isActive = !isActive
         
         if isActive {
+            cancelPendingActions()
             randomizeInterval()
             
             // Use Utito Tempo if enabled
             if utitoTempoEnabled {
-                keyPress.pressKey(utitoTempoHotkey)
+                keyPress.pressKey(utitoTempoHotkey, priority: .regular, group: keyPressGroup)
                 lastUtitoTime = Date()
                 currentUtitoDuration = randomUtitoDuration()
                 print("⚡ Utito Tempo CAST (next recast in \(String(format: "%.1f", currentUtitoDuration))s)")
                 
-                // Start combo after Utito Tempo with human-like delay
+                // Start combo after Utito Tempo with the configured randomized delay.
                 let delay = humanRandom(median: 0.25, spread: 0.25, min: 0.15, max: 0.5)
                 lastPressTime = Date().addingTimeInterval(-nextInterval + delay)
             } else {
@@ -208,16 +229,51 @@ class AutoCombo {
             
             // Press auto loot after stopping (if enabled)
             if wasActive && lootOnStop {
-                let delay = humanRandom(median: 0.3, spread: 0.3, min: 0.15, max: 0.6)
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                    guard let self = self else { return }
-                    self.keyPress.pressKey(self.autoLootHotkey)
-                    print("📦 Auto Loot pressed after combo stop")
-                }
+                scheduleLootAfterStop()
             }
         }
         
         onActiveChanged?(isActive)
+    }
+
+    private func scheduleLootAfterStop() {
+        cancelPendingActions()
+        let delay = lootDelayOverride?() ??
+            humanRandom(median: 0.3, spread: 0.3, min: 0.15, max: 0.6)
+        let generation = lootGeneration
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.lootGeneration == generation,
+                  self.enabled,
+                  !self.isActive,
+                  self.lootOnStop else {
+                return
+            }
+
+            self.lootWorkItem = nil
+            if self.keyPress.pressKey(
+                self.autoLootHotkey,
+                priority: .regular,
+                group: self.keyPressGroup
+            ) {
+                print("📦 Auto Loot pressed after combo stop")
+            }
+        }
+        lootWorkItem = workItem
+        delayedActionQueue.asyncAfter(deadline: .now() + max(0, delay), execute: workItem)
+    }
+
+    func cancelPendingActions() {
+        lootGeneration += 1
+        lootWorkItem?.cancel()
+        lootWorkItem = nil
+        keyPress.cancelPendingRequests(in: keyPressGroup)
+    }
+
+    private func reenableEventTap() {
+        guard let tap = eventTap else { return }
+        CGEvent.tapEnable(tap: tap, enable: true)
+        print("⚔️ Re-enabled combo keyboard tap")
     }
     
     /// Called from main loop - presses combo every 2-2.1s when active
@@ -234,7 +290,7 @@ class AutoCombo {
         // Re-cast Utito Tempo with random interval 9-12 seconds if enabled
         if recastUtito && utitoTempoEnabled {
             if now.timeIntervalSince(lastUtitoTime) >= currentUtitoDuration {
-                keyPress.pressKey(utitoTempoHotkey)
+                keyPress.pressKey(utitoTempoHotkey, priority: .regular, group: keyPressGroup)
                 lastUtitoTime = now
                 currentUtitoDuration = randomUtitoDuration()
                 print("⚡ Utito Tempo RE-CAST (next recast in \(String(format: "%.1f", currentUtitoDuration))s)")
@@ -243,7 +299,7 @@ class AutoCombo {
         
         // Press combo key at regular interval (only in standard mode, not Paladin Combo)
         if !paladinComboEnabled && now.timeIntervalSince(lastPressTime) >= nextInterval {
-            keyPress.pressKey(comboHotkey)
+            keyPress.pressKey(comboHotkey, priority: .regular, group: keyPressGroup)
             lastPressTime = now
             randomizeInterval()
         }
@@ -261,7 +317,7 @@ class AutoCombo {
 
         lastPaladinComboTime = now
         currentPaladinCooldown = humanRandom(median: 0.7, spread: 0.2, min: 0.5, max: 1.1)
-        keyPress.pressKey(comboHotkey)
+        keyPress.pressKey(comboHotkey, priority: .regular, group: keyPressGroup)
         print("🏹 Paladin Combo triggered (ammo decreased)")
     }
 }

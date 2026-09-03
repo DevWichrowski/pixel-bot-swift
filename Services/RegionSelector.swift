@@ -3,12 +3,14 @@ import AppKit
 import SwiftUI
 
 /// Region selector window for picking screen areas
-class RegionSelector: NSObject {
+@MainActor
+final class RegionSelector: NSObject {
     static let shared = RegionSelector()
     
     private var selectionWindow: NSWindow?
     private var overlayView: RegionOverlayView?
     private var completionHandler: (((x: Int, y: Int, width: Int, height: Int)?) -> Void)?
+    private var selectionScreen: NSScreen?
     
     private override init() {
         super.init()
@@ -16,24 +18,20 @@ class RegionSelector: NSObject {
     
     /// Start region selection
     func selectRegion(completion: @escaping ((x: Int, y: Int, width: Int, height: Int)?) -> Void) {
-        // Store completion handler
-        self.completionHandler = completion
-        
-        // Must run on main thread
-        if Thread.isMainThread {
-            showSelectionWindow()
-        } else {
-            DispatchQueue.main.async { [weak self] in
-                self?.showSelectionWindow()
-            }
-        }
+        completionHandler = completion
+        showSelectionWindow()
     }
     
     private func showSelectionWindow() {
         // Close any existing window first
         closeWindow()
         
-        guard let screen = NSScreen.main else {
+        guard let screen = NSScreen.screens.first(where: { screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return false
+            }
+            return CGDirectDisplayID(number.uint32Value) == CGMainDisplayID()
+        }) else {
             completionHandler?(nil)
             return
         }
@@ -54,7 +52,7 @@ class RegionSelector: NSObject {
         window.hasShadow = false
         
         // Create overlay view
-        let view = RegionOverlayView(frame: screen.frame)
+        let view = RegionOverlayView(frame: NSRect(origin: .zero, size: screen.frame.size))
         view.onComplete = { [weak self] rect in
             self?.finishSelection(rect: rect)
         }
@@ -65,6 +63,7 @@ class RegionSelector: NSObject {
         window.contentView = view
         self.overlayView = view
         self.selectionWindow = window
+        self.selectionScreen = screen
         
         // Make key and show
         window.makeKeyAndOrderFront(nil)
@@ -83,20 +82,23 @@ class RegionSelector: NSObject {
         NSCursor.pop()
         
         // Get screen height before closing
-        let screenHeight = NSScreen.main?.frame.height ?? 0
+        let screenHeight = selectionScreen?.frame.height ?? 0
         
         // Close window
         closeWindow()
         
         // Calculate flipped Y (screen coords are flipped)
-        let flippedY = screenHeight - rect.maxY
+        let minX = Int(floor(rect.minX))
+        let minY = Int(floor(screenHeight - rect.maxY))
+        let maxX = Int(ceil(rect.maxX))
+        let maxY = Int(ceil(screenHeight - rect.minY))
         
         // Call completion
         let result = (
-            x: Int(rect.origin.x),
-            y: Int(flippedY),
-            width: Int(rect.width),
-            height: Int(rect.height)
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY
         )
         
         completionHandler?(result)
@@ -117,6 +119,7 @@ class RegionSelector: NSObject {
         overlayView = nil
         selectionWindow?.orderOut(nil)
         selectionWindow = nil
+        selectionScreen = nil
     }
 }
 

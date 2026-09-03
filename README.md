@@ -24,7 +24,7 @@
 | **Critical Heal** | Priority heal at critical HP levels |
 | **Auto Mana** | Automatic mana restoration |
 | **Potion Mode** | Critical heal shares cooldown with mana (like potions) |
-| **Configurable Cooldowns** | Separate spell (0.5s) and potion (0.5s) cooldowns |
+| **Healing Cooldowns** | Fixed 1.0s healing group cooldown; separate configurable potion cooldown |
 
 ### ⚔️ Auto Combo
 | Feature | Description |
@@ -59,31 +59,27 @@
 
 ## 📦 Installation
 
-### Option 1: Build from Source
+### Build and Launch Locally
 
 ```bash
 # Clone the repository
 git clone https://github.com/DevWichrowski/pixel-bot-swift.git
 cd pixel-bot-swift
 
-# Build with Swift Package Manager
-swift build -c release
-
-# Run the app
-swift run
-```
-
-### Option 2: Build App Bundle
-
-```bash
-# Create .app bundle
+# Build and sign the local development app identity
 ./build_app.sh
 
-# Move to Applications
-mv build/PixelBot.app /Applications/
+# Always launch the signed bundle so macOS permissions use the same identity
+open "PixelBot Dev.app"
 ```
 
-### Option 3: Xcode
+The local bundle is named `PixelBot Dev` and uses `com.pixelbot.tibia.dev`, keeping its Screen
+Recording and Accessibility entries separate from the production `PixelBot` app. The build
+requires `Apple Development: Patryk Wichrowski (7A7BZ23BK3)`, whose signed `TeamIdentifier` is
+`C3W87X2V7H`, or an explicit `PIXELBOT_SIGNING_IDENTITY` that produces that same Team ID. The
+first build of the development identity requires its own Screen Recording and Accessibility grant.
+
+### Xcode
 
 1. Open the folder in Xcode
 2. Select your signing team

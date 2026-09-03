@@ -3,7 +3,10 @@ import Cocoa
 
 /// Auto skinner that triggers hotkey on right mouse click
 class AutoSkinner {
-    private let keyPress: KeyPressService
+    private let keyPress: any KeyPressServicing
+    private let keyPressGroup = KeyPressRequestGroup()
+    private let delayedActionQueue: DispatchQueue
+    private let skinningDelayOverride: (() -> TimeInterval)?
     
     var enabled: Bool = false
     var hotkey: String = "["
@@ -11,9 +14,17 @@ class AutoSkinner {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var isListening: Bool = false
+    private var pendingSkinningWorkItems: [UUID: DispatchWorkItem] = [:]
+    private var skinningGeneration = 0
     
-    init(keyPress: KeyPressService = .shared) {
+    init(
+        keyPress: any KeyPressServicing = KeyPressService.shared,
+        delayedActionQueue: DispatchQueue = .main,
+        skinningDelayOverride: (() -> TimeInterval)? = nil
+    ) {
         self.keyPress = keyPress
+        self.delayedActionQueue = delayedActionQueue
+        self.skinningDelayOverride = skinningDelayOverride
     }
     
     deinit {
@@ -39,6 +50,11 @@ class AutoSkinner {
                 }
                 
                 let skinner = Unmanaged<AutoSkinner>.fromOpaque(refcon).takeUnretainedValue()
+
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    skinner.reenableEventTap()
+                    return Unmanaged.passUnretained(event)
+                }
                 
                 if skinner.enabled && type == .rightMouseDown {
                     skinner.performSkinning()
@@ -65,6 +81,8 @@ class AutoSkinner {
     
     /// Stop the mouse listener
     func stop() {
+        cancelPendingActions()
+
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
         }
@@ -82,18 +100,40 @@ class AutoSkinner {
     /// Toggle auto skinner
     func toggle(_ enabled: Bool) {
         self.enabled = enabled
+        if !enabled {
+            stop()
+        }
         let status = enabled ? "ENABLED" : "DISABLED"
         print("🔪 Auto Skinner \(status) (Hotkey: \(hotkey))")
     }
     
-    private func performSkinning() {
-        // Wait human-like delay and press hotkey
-        let delay = humanRandom(median: 0.35, spread: 0.35, min: 0.15, max: 0.8)
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self = self else { return }
-            self.keyPress.pressKey(self.hotkey)
+    func performSkinning() {
+        // Wait for the existing randomized delay, then press the hotkey.
+        let delay = skinningDelayOverride?() ??
+            humanRandom(median: 0.35, spread: 0.35, min: 0.15, max: 0.8)
+        let id = UUID()
+        let generation = skinningGeneration
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingSkinningWorkItems.removeValue(forKey: id)
+            guard self.skinningGeneration == generation, self.enabled else { return }
+            self.keyPress.pressKey(self.hotkey, priority: .regular, group: self.keyPressGroup)
             print("🔪 Skinned! (in \(String(format: "%.3f", delay))s)")
         }
+        pendingSkinningWorkItems[id] = workItem
+        delayedActionQueue.asyncAfter(deadline: .now() + max(0, delay), execute: workItem)
+    }
+
+    func cancelPendingActions() {
+        skinningGeneration += 1
+        pendingSkinningWorkItems.values.forEach { $0.cancel() }
+        pendingSkinningWorkItems.removeAll(keepingCapacity: true)
+        keyPress.cancelPendingRequests(in: keyPressGroup)
+    }
+
+    private func reenableEventTap() {
+        guard enabled, let tap = eventTap else { return }
+        CGEvent.tapEnable(tap: tap, enable: true)
+        print("🔪 Re-enabled skinner mouse tap")
     }
 }

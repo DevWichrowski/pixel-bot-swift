@@ -1,0 +1,532 @@
+import XCTest
+@testable import PixelBot
+
+final class CaptureOCRPipelineTests: XCTestCase {
+    func testWhiteTextPreprocessingRejectsGreenStatusBar() throws {
+        try it("should retain white status text while rejecting the green bar") {
+            let bytes: [UInt8] = [
+                255, 255, 255, 255,
+                0, 255, 0, 255,
+            ]
+            let image = CGImage(
+                width: 2,
+                height: 1,
+                bitsPerComponent: 8,
+                bitsPerPixel: 32,
+                bytesPerRow: 8,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo.byteOrder32Big.union(
+                    CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+                ),
+                provider: CGDataProvider(data: Data(bytes) as CFData)!,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+            )!
+
+            let result = try OCRImagePreprocessor(strategy: .whiteText).process(image)
+
+            XCTAssertEqual([result.binaryBytes[0], result.binaryBytes[3]], [0, 255])
+        }
+    }
+
+    func testFastRecognitionWithoutFallback() {
+        it("should accept a high confidence fast result without accurate OCR") {
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [captureOCRCandidate("10/20", confidence: 0.90)]
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                mode: .realtime,
+                recognizer: recognizer
+            )
+            let result = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0),
+                region: captureOCRFullRegion()
+            )
+
+            XCTAssertEqual([result.confirmedCurrent, recognizer.calls.count], [10, 1])
+        }
+    }
+
+    func testAccurateFallbackForLowConfidence() {
+        it("should use accurate OCR when fast confidence is below the threshold") {
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [captureOCRCandidate("10/20", confidence: 0.59)],
+                accurate: [captureOCRCandidate("11/20", confidence: 0.92)]
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                mode: .diagnostic,
+                recognizer: recognizer
+            )
+            let result = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0),
+                region: captureOCRFullRegion()
+            )
+
+            XCTAssertEqual(
+                [result.confirmedCurrent, recognizer.calls.count],
+                [11, 2]
+            )
+        }
+    }
+
+    func testAccurateFallbackForInvalidFastResult() {
+        it("should use accurate OCR when fast OCR has no full valid result") {
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [captureOCRCandidate("10")],
+                accurate: [captureOCRCandidate("10/20")]
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                mode: .diagnostic,
+                recognizer: recognizer
+            )
+            let result = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0),
+                region: captureOCRFullRegion()
+            )
+
+            XCTAssertEqual(
+                [result.confirmedCurrent, recognizer.calls.count],
+                [10, 2]
+            )
+        }
+    }
+
+    func testRealtimeAcceptsLowConfidenceFastResult() {
+        it("should immediately accept a valid low confidence fast result in realtime mode") {
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [captureOCRCandidate("10/20", confidence: 0.20)],
+                accurate: [captureOCRCandidate("11/20", confidence: 0.99)]
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                mode: .realtime,
+                recognizer: recognizer
+            )
+
+            let result = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0),
+                region: captureOCRFullRegion()
+            )
+
+            XCTAssertEqual([result.confirmedCurrent, recognizer.calls.count], [10, 1])
+        }
+    }
+
+    func testRealtimeNeverUsesAccurateFallback() {
+        it("should never invoke accurate OCR in realtime mode") {
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [[]],
+                accurate: [captureOCRCandidate("10/20")]
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                mode: .realtime,
+                recognizer: recognizer
+            )
+
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0),
+                region: captureOCRFullRegion()
+            )
+
+            XCTAssertEqual(recognizer.calls, [.fast])
+        }
+    }
+
+    func testStaleFrameHasNoConfirmedValue() {
+        it("should not confirm HP from a frame older than 250 milliseconds") {
+            let timestamp = Date(timeIntervalSince1970: 1_000)
+            let recognizer = CaptureOCRRecognizerStub(fast: [captureOCRCandidate("10/20")])
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                recognizer: recognizer
+            )
+
+            let result = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0, timestamp: timestamp),
+                region: captureOCRFullRegion(),
+                now: timestamp.addingTimeInterval(0.250)
+            )
+
+            XCTAssertNil(result.confirmedCurrent)
+        }
+    }
+
+    func testStaleReadingDoesNotCountTowardConfirmation() {
+        it("should require two fresh reads after a stale matching HP read") {
+            let timestamp = Date(timeIntervalSince1970: 1_100)
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [captureOCRCandidate("10/20"), captureOCRCandidate("10/20")]
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                requiredConfirmations: 2,
+                recognizer: recognizer
+            )
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0, timestamp: timestamp),
+                region: captureOCRFullRegion(),
+                now: timestamp.addingTimeInterval(0.250)
+            )
+            let freshResult = pipeline.process(
+                frame: makeCaptureOCRFrame(
+                    pattern: 1,
+                    timestamp: timestamp.addingTimeInterval(0.260)
+                ),
+                region: captureOCRFullRegion(),
+                now: timestamp.addingTimeInterval(0.260)
+            )
+
+            XCTAssertNil(freshResult.confirmedCurrent)
+        }
+    }
+
+    func testThrownRecognitionDoesNotCountTowardConfirmation() {
+        it("should require two matching reads after an OCR error") {
+            let timestamp = Date(timeIntervalSince1970: 1_200)
+            let recognizer = CaptureOCRThrowingRecognizerStub()
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                requiredConfirmations: 2,
+                recognizer: recognizer
+            )
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0, timestamp: timestamp),
+                region: captureOCRFullRegion(),
+                now: timestamp
+            )
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(
+                    pattern: 1,
+                    timestamp: timestamp.addingTimeInterval(0.030)
+                ),
+                region: captureOCRFullRegion(),
+                now: timestamp.addingTimeInterval(0.030)
+            )
+            let resultAfterError = pipeline.process(
+                frame: makeCaptureOCRFrame(
+                    pattern: 2,
+                    timestamp: timestamp.addingTimeInterval(0.060)
+                ),
+                region: captureOCRFullRegion(),
+                now: timestamp.addingTimeInterval(0.060)
+            )
+
+            XCTAssertNil(resultAfterError.confirmedCurrent)
+        }
+    }
+
+    func testInvalidReadingBreaksAnEstablishedConfirmation() {
+        it("should require two fresh reads after invalid OCR interrupts a confirmed value") {
+            let timestamp = Date(timeIntervalSince1970: 1_300)
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [
+                    captureOCRCandidate("10/20"),
+                    captureOCRCandidate("10/20"),
+                    [],
+                    captureOCRCandidate("10/20"),
+                ]
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                requiredConfirmations: 2,
+                recognizer: recognizer
+            )
+            for (pattern, offset) in [(0, 0.000), (1, 0.030), (2, 0.060)] {
+                _ = pipeline.process(
+                    frame: makeCaptureOCRFrame(
+                        pattern: pattern,
+                        timestamp: timestamp.addingTimeInterval(offset)
+                    ),
+                    region: captureOCRFullRegion(),
+                    now: timestamp.addingTimeInterval(offset)
+                )
+            }
+            let firstFreshResult = pipeline.process(
+                frame: makeCaptureOCRFrame(
+                    pattern: 0,
+                    timestamp: timestamp.addingTimeInterval(0.090)
+                ),
+                region: captureOCRFullRegion(),
+                now: timestamp.addingTimeInterval(0.090)
+            )
+
+            XCTAssertNil(firstFreshResult.confirmedCurrent)
+        }
+    }
+
+    func testReadoutBecomingStaleDuringRecognitionBreaksConfirmation() {
+        it("should require two reads when the previous confirmation expires during OCR") {
+            let callCount = CaptureOCRLockedBox(0)
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [
+                    captureOCRCandidate("10/20"),
+                    captureOCRCandidate("10/20"),
+                    captureOCRCandidate("10/20"),
+                ],
+                beforeResponse: { _ in
+                    let currentCall = callCount.value + 1
+                    callCount.set(currentCall)
+                    if currentCall == 3 {
+                        Thread.sleep(forTimeInterval: 0.100)
+                    }
+                }
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                requiredConfirmations: 2,
+                recognizer: recognizer
+            )
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0),
+                region: captureOCRFullRegion()
+            )
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 1),
+                region: captureOCRFullRegion()
+            )
+            Thread.sleep(forTimeInterval: 0.180)
+            let result = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 2),
+                region: captureOCRFullRegion()
+            )
+
+            XCTAssertNil(result.confirmedCurrent)
+        }
+    }
+
+    func testFreshnessBoundary() {
+        it("should become stale exactly at the 250 millisecond boundary") {
+            let timestamp = Date(timeIntervalSince1970: 1_000)
+            let recognizer = CaptureOCRRecognizerStub(fast: [captureOCRCandidate("10/20")])
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                recognizer: recognizer
+            )
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0, timestamp: timestamp),
+                region: captureOCRFullRegion(),
+                now: timestamp
+            )
+
+            XCTAssertEqual(
+                [
+                    pipeline.readout(at: timestamp.addingTimeInterval(0.249)).state,
+                    pipeline.readout(at: timestamp.addingTimeInterval(0.250)).state,
+                ],
+                [.valid, .stale]
+            )
+        }
+    }
+
+    func testMaximumChangeConfirmation() {
+        it("should accept a changed maximum after two consecutive matching reads") {
+            let timestamp = Date(timeIntervalSince1970: 2_000)
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [
+                    captureOCRCandidate("90/100"),
+                    captureOCRCandidate("90/120"),
+                ]
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                recognizer: recognizer
+            )
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0, timestamp: timestamp),
+                region: captureOCRFullRegion(),
+                now: timestamp
+            )
+            let initial = pipeline.readout(at: timestamp).maximum
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 1, timestamp: timestamp.addingTimeInterval(0.03)),
+                region: captureOCRFullRegion(),
+                now: timestamp.addingTimeInterval(0.03)
+            )
+            let afterFirstChange = pipeline.readout(at: timestamp.addingTimeInterval(0.03)).maximum
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 1, timestamp: timestamp.addingTimeInterval(0.06)),
+                region: captureOCRFullRegion(),
+                now: timestamp.addingTimeInterval(0.06)
+            )
+            let afterConfirmation = pipeline.readout(at: timestamp.addingTimeInterval(0.06)).maximum
+
+            XCTAssertEqual([initial, afterFirstChange, afterConfirmation], [100, 100, 120])
+        }
+    }
+
+    func testFailedOCRDoesNotPoisonHashCache() {
+        it("should retry Vision when the same changed image failed previously") {
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [captureOCRCandidate("10/20"), [], []],
+                accurate: [[], []]
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                mode: .diagnostic,
+                recognizer: recognizer
+            )
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0),
+                region: captureOCRFullRegion()
+            )
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 1),
+                region: captureOCRFullRegion()
+            )
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 1),
+                region: captureOCRFullRegion()
+            )
+
+            XCTAssertEqual(recognizer.calls, [.fast, .fast, .accurate, .fast, .accurate])
+        }
+    }
+
+    func testIdenticalImageCache() {
+        it("should refresh an identical accepted image without another Vision request") {
+            let timestamp = Date(timeIntervalSince1970: 3_000)
+            let recognizer = CaptureOCRRecognizerStub(fast: [captureOCRCandidate("10/20")])
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                recognizer: recognizer
+            )
+            _ = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0, timestamp: timestamp),
+                region: captureOCRFullRegion(),
+                now: timestamp
+            )
+            let result = pipeline.process(
+                frame: makeCaptureOCRFrame(
+                    pattern: 0,
+                    timestamp: timestamp.addingTimeInterval(0.1)
+                ),
+                region: captureOCRFullRegion(),
+                now: timestamp.addingTimeInterval(0.1)
+            )
+
+            XCTAssertEqual([result.confirmedCurrent, recognizer.calls.count], [10, 1])
+        }
+    }
+
+    func testDiagnosticImages() {
+        it("should retain only region-sized raw and binary diagnostics in memory") {
+            let recognizer = CaptureOCRRecognizerStub(fast: [captureOCRCandidate("10/20")])
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                recognizer: recognizer
+            )
+            let result = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0),
+                region: captureOCRFullRegion()
+            )
+
+            XCTAssertEqual(
+                [
+                    result.diagnostic.rawImage?.width,
+                    result.diagnostic.binaryImage?.width,
+                ],
+                [12, 36]
+            )
+        }
+    }
+
+    func testSyntheticDigitFixturesAtOneAndTwoTimesScale() {
+        it("should preprocess synthetic digit fixtures captured at one-times and two-times scale") {
+            let oneTimes = makeSyntheticDigitFrame(scale: 1)
+            let twoTimes = makeSyntheticDigitFrame(scale: 2)
+            var oneTimesPipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                recognizer: CaptureOCRRecognizerStub(fast: [captureOCRCandidate("12/34")])
+            )
+            var twoTimesPipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                recognizer: CaptureOCRRecognizerStub(fast: [captureOCRCandidate("12/34")])
+            )
+            let oneTimesResult = oneTimesPipeline.process(
+                frame: oneTimes.frame,
+                region: oneTimes.region
+            )
+            let twoTimesResult = twoTimesPipeline.process(
+                frame: twoTimes.frame,
+                region: twoTimes.region
+            )
+
+            XCTAssertEqual(
+                [
+                    oneTimesResult.diagnostic.rawImage?.width,
+                    oneTimesResult.diagnostic.binaryImage?.width,
+                    twoTimesResult.diagnostic.rawImage?.width,
+                    twoTimesResult.diagnostic.binaryImage?.width,
+                ],
+                [19, 57, 38, 114]
+            )
+        }
+    }
+
+    func testIdenticalFrameCachePerformance() {
+        it("should process one hundred identical frames with cache p95 below ten milliseconds") {
+            let recognizer = CaptureOCRRecognizerStub(fast: [captureOCRCandidate("10/20")])
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                recognizer: recognizer
+            )
+            let frame = makeCaptureOCRFrame(pattern: 0)
+            var latencies: [TimeInterval] = []
+            latencies.reserveCapacity(100)
+            for _ in 0..<100 {
+                let result = pipeline.process(frame: frame, region: captureOCRFullRegion())
+                latencies.append(result.readout.latency)
+            }
+            let sortedCachedLatencies = latencies.dropFirst().sorted()
+            let percentileIndex = Int(Double(sortedCachedLatencies.count - 1) * 0.95)
+            let cacheP95 = sortedCachedLatencies[percentileIndex]
+
+            XCTAssertTrue(
+                latencies[0] < 0.100
+                    && cacheP95 < 0.010
+                    && recognizer.calls == [.fast]
+            )
+        }
+    }
+}
+
+private enum CaptureOCRThrownError: Error {
+    case recognitionFailed
+}
+
+private final class CaptureOCRThrowingRecognizerStub: OCRTextRecognizing {
+    private var callCount = 0
+
+    func recognize(in image: CGImage, mode: OCRRecognitionMode) throws -> [OCRTextCandidate] {
+        _ = image
+        _ = mode
+        callCount += 1
+        if callCount == 2 {
+            throw CaptureOCRThrownError.recognitionFailed
+        }
+        return captureOCRCandidate("10/20")
+    }
+}

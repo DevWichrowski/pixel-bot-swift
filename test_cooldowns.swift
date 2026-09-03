@@ -41,8 +41,11 @@ struct HealConfig {
 class TestAutoHealer {
     private let keyPress: MockKeyPressService
     
-    // Configurable cooldowns
-    var spellCooldown: TimeInterval = 0.5   // For heal spells
+    // Healing group cooldown is fixed; the setter keeps old test call sites source-compatible.
+    var spellCooldown: TimeInterval {
+        get { 1.0 }
+        set { _ = newValue }
+    }
     var potionCooldown: TimeInterval = 0.5  // For potions
     
     var maxHP: Int?
@@ -299,9 +302,9 @@ func runTests() {
     test("Both F4 and F1 were pressed", keyPress.f4Count == 1 && keyPress.f1Count == 1)
     
     // ============================================
-    // TEST 5: Configurable cooldown values
+    // TEST 5: Fixed healing group cooldown
     // ============================================
-    print("\n--- TEST 5: Configurable cooldown values ---")
+    print("\n--- TEST 5: Fixed healing group cooldown ---")
     keyPress.reset()
     healer.resetAllCooldowns()
     
@@ -313,8 +316,8 @@ func runTests() {
     _ = healer.checkAndHeal(currentHP: 600)
     test("First heal works", keyPress.f1Count == 1)
     
-    // Wait 150ms - spell CD should expire, potion still active
-    usleep(150_000)
+    // Wait until the fixed one-second healing cooldown expires.
+    usleep(1_050_000)
     
     _ = healer.checkAndHeal(currentHP: 600)
     test("Spell works after spell cooldown expires", keyPress.f1Count == 2)

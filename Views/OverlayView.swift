@@ -1,235 +1,351 @@
 import SwiftUI
 import AppKit
 
-/// Main overlay view containing all tabs
+private enum OverlayTab: String, CaseIterable, Identifiable {
+    case status
+    case config
+    case presets
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .status: "Status"
+        case .config: "Config"
+        case .presets: "Presets"
+        }
+    }
+
+    var icon: TibiaAsset {
+        switch self {
+        case .status: .iconStatus
+        case .config: .iconRegion
+        case .presets: .iconPermissions
+        }
+    }
+}
+
+/// Main Tactical Pixel HUD containing all tabs.
 struct OverlayView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var bot = TibiaBot()
-    @State private var currentTab = "status"
-    @State private var dragOffset = CGPoint.zero
+    @State private var currentTab = OverlayTab.status
     @State private var isCollapsed = false
-    
+
+    private let onCollapseChange: (Bool) -> Void
+
+    init(onCollapseChange: @escaping (Bool) -> Void = { _ in }) {
+        self.onCollapseChange = onCollapseChange
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Header
             headerView
-            
+
             if !isCollapsed {
-                // Tabs
                 tabsView
-                
-                // Content
+
                 Group {
                     switch currentTab {
-                    case "status":
+                    case .status:
                         StatusView(bot: bot)
-                    case "config":
+                    case .config:
                         ConfigView(bot: bot)
-                    case "presets":
+                    case .presets:
                         PresetsView(bot: bot)
-                    default:
-                        StatusView(bot: bot)
                     }
                 }
-                .frame(maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
+                .frame(height: 474)
+
+                PersistentRunControl(bot: bot)
+                    .frame(height: 52)
             }
         }
-        .frame(width: 280, height: isCollapsed ? 32 : 550)
-        .background(Theme.bg)
-        .overlay(
-            RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [Theme.borderHighlight, Theme.borderShadow],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 4
-                )
-        )
-        .animation(.easeInOut(duration: 0.2), value: isCollapsed)
+        .frame(width: 340, height: isCollapsed ? 40 : 600)
+        .background {
+            TibiaAssetImage(.stoneBackground, resizingMode: .tile)
+        }
+        .tibiaFrame(.frameOuter, insets: EdgeInsets(top: 24, leading: 24, bottom: 24, trailing: 24))
+        .shadow(color: Color.black.opacity(0.55), radius: 3, x: 1, y: 2)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: isCollapsed)
     }
-    
+
     // MARK: - Header
-    
+
     private var headerView: some View {
-        HStack {
-            // Collapse/Expand button
-            Button(action: {
-                isCollapsed.toggle()
-            }) {
-                Text(isCollapsed ? "[+]" : "[-]")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundColor(Theme.accent)
+        HStack(spacing: 7) {
+            Button {
+                let collapsed = !isCollapsed
+                isCollapsed = collapsed
+                onCollapseChange(collapsed)
+            } label: {
+                Image(systemName: isCollapsed ? "chevron.down" : "chevron.up")
+                    .font(.system(size: 11, weight: .bold))
             }
-            .buttonStyle(.plain)
-            
-            // Decoration
-            Text("◆◇◆")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(Theme.accent)
-            
-            // Title with preset name (only when expanded)
-            if !isCollapsed {
-                if let preset = bot.presets.first(where: { $0.id == bot.activePresetId }) {
-                    Text("PIXEL")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundColor(Theme.gold)
-                    Text("-")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundColor(Theme.textDim)
-                    Text(preset.name.uppercased())
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundColor(Theme.accent)
-                        .lineLimit(1)
-                } else {
-                    Text("PIXEL BOT")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundColor(Theme.gold)
-                    Text("v\(AppVersion.current)")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(Theme.textDim)
-                }
+            .buttonStyle(TacticalQuietButtonStyle(tint: Theme.accentBright))
+            .tacticalFocusRing(cornerRadius: 3)
+            .accessibilityLabel(isCollapsed ? "Expand PixelBot" : "Collapse PixelBot")
+            .help(isCollapsed ? "Expand the Tactical Pixel HUD" : "Collapse the Tactical Pixel HUD")
+
+            TibiaAssetImage(.iconStatus)
+                .frame(width: 16, height: 16)
+
+            if isCollapsed {
+                Text(bundleDisplayName.uppercased())
+                    .font(Theme.headingFont())
+                    .foregroundStyle(Theme.textBright)
+            } else {
+                activeTitle
             }
-            
-            // Status indicator (always visible, more prominent when collapsed)
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(bot.isRunning ? Theme.success : Theme.textDim)
-                    .frame(width: 8, height: 8)
-                
-                // Combo active indicator
-                if bot.comboIsActive {
-                    Text("⚔️")
-                        .font(.system(size: 12))
-                }
-                
+
+            Spacer(minLength: 4)
+
+            HStack(spacing: 5) {
+                Rectangle()
+                    .fill(bot.runState.tacticalColor)
+                    .frame(width: 6, height: 6)
+
                 if isCollapsed {
-                    Text(bot.isRunning ? "RUNNING" : "STOPPED")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundColor(bot.isRunning ? Theme.success : Theme.textDim)
-                    
-                    if bot.comboIsActive {
-                        Text("COMBO")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundColor(Theme.warning)
-                    }
+                    Text(bot.runState.tacticalTitle.uppercased())
+                        .font(Theme.dataFont(weight: .semibold))
+                        .foregroundStyle(bot.runState.tacticalColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+
+                if bot.comboIsActive {
+                    Text("⚔")
+                        .font(Theme.utilityFont(weight: .semibold))
+                        .foregroundStyle(Theme.warning)
+                        .accessibilityLabel("Combo active")
                 }
             }
-            
-            Spacer()
-            
-            // Close button
-            Button(action: {
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Bot state")
+            .accessibilityValue(bot.runState.tacticalTitle)
+            .help(bot.runState.tacticalHelp)
+
+            Button {
                 NSApplication.shared.terminate(nil)
-            }) {
-                Text("[X]")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundColor(Theme.textDim)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TacticalQuietButtonStyle(tint: Theme.textDim))
+            .tacticalFocusRing(cornerRadius: 3)
+            .accessibilityLabel("Quit PixelBot")
+            .help("Quit PixelBot")
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(Theme.bgDark)
+        .frame(height: 40)
+        .background {
+            TibiaAssetImage(
+                .titleBar,
+                capInsets: EdgeInsets(top: 14, leading: 20, bottom: 14, trailing: 20)
+            )
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.borderMid)
+                .frame(height: 1)
+        }
     }
-    
+
+    @ViewBuilder
+    private var activeTitle: some View {
+        if let preset = bot.presets.first(where: { $0.id == bot.activePresetId }) {
+            HStack(spacing: 4) {
+                Text(bundleDisplayName.uppercased())
+                    .foregroundStyle(Theme.textBright)
+                Text("/")
+                    .foregroundStyle(Theme.textDim)
+                Text(preset.name.uppercased())
+                    .foregroundStyle(Theme.gold)
+                    .lineLimit(1)
+            }
+            .font(Theme.headingFont())
+            .help("Active preset: \(preset.name)")
+        } else {
+            HStack(spacing: 5) {
+                Text(bundleDisplayName.uppercased())
+                    .foregroundStyle(Theme.textBright)
+                Text("v\(AppVersion.current)")
+                    .font(Theme.dataFont())
+                    .foregroundStyle(Theme.textDim)
+            }
+            .font(Theme.headingFont())
+        }
+    }
+
+    private var bundleDisplayName: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String)
+            ?? "PixelBot"
+    }
+
     // MARK: - Tabs
-    
+
     private var tabsView: some View {
+        HStack(spacing: 1) {
+            ForEach(OverlayTab.allCases) { tab in
+                TabButton(
+                    title: tab.title,
+                    icon: tab.icon,
+                    isSelected: currentTab == tab
+                ) {
+                    currentTab = tab
+                }
+            }
+        }
+        .padding(.horizontal, 3)
+        .frame(height: 34)
+        .background(Theme.bgPanel)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.borderMid)
+                .frame(height: 1)
+        }
+    }
+}
+
+private struct PersistentRunControl: View {
+    @ObservedObject var bot: TibiaBot
+
+    var body: some View {
         VStack(spacing: 0) {
             Rectangle()
-                .fill(Theme.borderHighlight)
-                .frame(height: 2)
-            
-            HStack(spacing: 4) {
-                TabButton(
-                    title: "[\(Theme.Icons.status) STATUS]",
-                    isSelected: currentTab == "status"
-                ) {
-                    currentTab = "status"
-                }
-                
-                TabButton(
-                    title: "[\(Theme.Icons.config) CONFIG]",
-                    isSelected: currentTab == "config"
-                ) {
-                    currentTab = "config"
-                }
-                
-                TabButton(
-                    title: "[⚙️ PRESETS]",
-                    isSelected: currentTab == "presets"
-                ) {
-                    currentTab = "presets"
-                }
-                
-                Spacer()
+                .fill(Theme.borderMid)
+                .frame(height: 1)
+
+            PixelButton(
+                bot.isRunning
+                    ? "\(Theme.Icons.stop)  STOP PIXELBOT"
+                    : "\(Theme.Icons.start)  START PIXELBOT",
+                color: bot.isRunning ? Theme.error : Theme.success,
+                fillWidth: true
+            ) {
+                bot.toggle()
             }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 4)
-            .background(Theme.bgPanel)
-            
-            Rectangle()
-                .fill(Theme.borderShadow)
-                .frame(height: 2)
+            .help(
+                bot.isRunning
+                    ? "Stop capture and cancel pending actions"
+                    : "Check permissions and start capture"
+            )
+            .padding(8)
+        }
+        .frame(height: 52)
+        .background {
+            TibiaAssetImage(
+                .titleBar,
+                capInsets: EdgeInsets(top: 14, leading: 20, bottom: 14, trailing: 20)
+            )
         }
     }
 }
 
-struct TabButton: View {
+private struct TabButton: View {
     let title: String
+    let icon: TibiaAsset
     let isSelected: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
-            Text(title)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundColor(isSelected ? Theme.accent : Theme.textDim)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(isSelected ? Theme.bgLight : Theme.bgPanel)
+            HStack(spacing: 5) {
+                TibiaAssetImage(icon)
+                    .frame(width: 14, height: 14)
+                Text(title)
+                    .font(Theme.utilityFont(weight: .semibold))
+            }
+            .foregroundStyle(isSelected ? Theme.textBright : Theme.textDim)
+            .frame(maxWidth: .infinity, minHeight: 28, maxHeight: 28)
+            .background {
+                TibiaAssetImage(
+                    isSelected ? .tabSelectedFrame : .tabFrame,
+                    capInsets: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)
+                )
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(isSelected ? Theme.gold : Color.clear)
+                    .frame(height: 2)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .tacticalFocusRing(cornerRadius: 0)
+        .accessibilityLabel("\(title) tab")
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .help("Show \(title.lowercased())")
     }
 }
 
-// MARK: - Keyable Window (allows keyboard input in borderless window)
+// MARK: - Keyable Window
 
-class KeyableWindow: NSWindow {
+final class KeyableWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
 
 // MARK: - Overlay Window
 
-class OverlayWindowController: NSObject {
+final class OverlayWindowController: NSObject {
+    private static let expandedSize = NSSize(width: 340, height: 600)
+    private static let collapsedSize = NSSize(width: 340, height: 40)
+
     private var window: NSWindow?
-    
+
     func showWindow() {
-        let contentView = OverlayView()
-        
         let window = KeyableWindow(
-            contentRect: NSRect(x: 20, y: 100, width: 280, height: 550),
+            contentRect: NSRect(origin: .zero, size: Self.expandedSize),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
-        
+
+        let contentView = OverlayView { [weak window] isCollapsed in
+            guard let window else { return }
+            Self.resize(window, forCollapsedState: isCollapsed)
+        }
+
         window.contentView = NSHostingView(rootView: contentView)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
         window.isMovableByWindowBackground = true
-        
-        // Position on screen
+
         if let screen = NSScreen.main {
-            let screenFrame = screen.frame
-            window.setFrameOrigin(NSPoint(x: 20, y: screenFrame.height - 650))
+            let visibleFrame = screen.visibleFrame
+            window.setFrameOrigin(
+                NSPoint(
+                    x: visibleFrame.minX + 20,
+                    y: visibleFrame.maxY - Self.expandedSize.height - 20
+                )
+            )
         }
-        
+
         window.makeKeyAndOrderFront(nil)
         self.window = window
+    }
+
+    private static func resize(_ window: NSWindow, forCollapsedState isCollapsed: Bool) {
+        let topLeft = NSPoint(x: window.frame.minX, y: window.frame.maxY)
+        let contentSize = isCollapsed ? collapsedSize : expandedSize
+        let frameSize = window.frameRect(
+            forContentRect: NSRect(origin: .zero, size: contentSize)
+        ).size
+        let frame = NSRect(
+            x: topLeft.x,
+            y: topLeft.y - frameSize.height,
+            width: frameSize.width,
+            height: frameSize.height
+        )
+        window.setFrame(
+            frame,
+            display: true,
+            animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
     }
 }
