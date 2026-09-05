@@ -99,7 +99,7 @@ enum OCRPreprocessingStrategy {
 
 struct OCRImagePreprocessor {
     private static let scale = 3
-    private static let whiteTextThreshold = 220
+    private static let whiteTextThreshold = 160
     private let strategy: OCRPreprocessingStrategy
 
     init(strategy: OCRPreprocessingStrategy = .adaptiveLuminance) {
@@ -576,7 +576,10 @@ struct NumericRegionOCRPipeline {
                 )
             }
 
-            let recognition = try recognize(preprocessed.image)
+            let recognition = try recognize(
+                preprocessedImage: preprocessed.image,
+                rawImage: rawImage
+            )
             let latency = ProcessInfo.processInfo.systemUptime - startTime
             let evaluatedAt = now ?? Date()
 
@@ -683,21 +686,41 @@ struct NumericRegionOCRPipeline {
     }
 
     private func recognize(
-        _ image: CGImage
+        preprocessedImage: CGImage,
+        rawImage: CGImage
     ) throws -> (
         selected: AcceptedCandidate?,
         diagnosticCandidate: OCRTextCandidate?,
         modes: [OCRRecognitionMode]
     ) {
-        let fastCandidates = try recognizer.recognize(in: image, mode: .fast).prefix(3)
+        let fastCandidates = try recognizer.recognize(
+            in: preprocessedImage,
+            mode: .fast
+        ).prefix(3)
         let fastSelection = bestValidCandidate(in: fastCandidates)
         var allCandidates = Array(fastCandidates)
         var selections = fastSelection.map { [$0] } ?? []
         var modes: [OCRRecognitionMode] = [.fast]
 
-        if mode == .diagnostic,
-           fastSelection == nil || fastSelection?.confidence ?? 0 < Self.accurateFallbackThreshold {
-            let accurateCandidates = (try? recognizer.recognize(in: image, mode: .accurate))?.prefix(3) ?? []
+        let shouldUseAccurateFallback: Bool
+        let accurateImage: CGImage
+        switch format {
+        case .currentAndMaximum:
+            shouldUseAccurateFallback = fastSelection == nil
+                || (mode == .diagnostic
+                    && (fastSelection?.confidence ?? 0) < Self.accurateFallbackThreshold)
+            accurateImage = rawImage
+        case .singleValue:
+            shouldUseAccurateFallback = mode == .diagnostic
+                && (fastSelection == nil
+                    || (fastSelection?.confidence ?? 0) < Self.accurateFallbackThreshold)
+            accurateImage = preprocessedImage
+        }
+        if shouldUseAccurateFallback {
+            let accurateCandidates = (try? recognizer.recognize(
+                in: accurateImage,
+                mode: .accurate
+            ))?.prefix(3) ?? []
             modes.append(.accurate)
             allCandidates.append(contentsOf: accurateCandidates)
             if let accurateSelection = bestValidCandidate(in: accurateCandidates) {

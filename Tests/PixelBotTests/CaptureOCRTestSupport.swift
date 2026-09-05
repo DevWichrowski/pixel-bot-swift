@@ -7,6 +7,7 @@ final class CaptureOCRRecognizerStub: OCRTextRecognizing {
     private var fastResponses: [[OCRTextCandidate]]
     private var accurateResponses: [[OCRTextCandidate]]
     private var storedCalls: [OCRRecognitionMode] = []
+    private var storedRequests: [String] = []
     private let beforeResponse: ((OCRRecognitionMode) -> Void)?
 
     init(
@@ -20,10 +21,11 @@ final class CaptureOCRRecognizerStub: OCRTextRecognizing {
     }
 
     func recognize(in image: CGImage, mode: OCRRecognitionMode) throws -> [OCRTextCandidate] {
-        _ = image
         beforeResponse?(mode)
         return lock.withLock {
             storedCalls.append(mode)
+            let modeName = mode == .fast ? "fast" : "accurate"
+            storedRequests.append("\(modeName):\(image.width)x\(image.height)")
             switch mode {
             case .fast:
                 return fastResponses.isEmpty ? [] : fastResponses.removeFirst()
@@ -35,6 +37,10 @@ final class CaptureOCRRecognizerStub: OCRTextRecognizing {
 
     var calls: [OCRRecognitionMode] {
         lock.withLock { storedCalls }
+    }
+
+    var requests: [String] {
+        lock.withLock { storedRequests }
     }
 }
 

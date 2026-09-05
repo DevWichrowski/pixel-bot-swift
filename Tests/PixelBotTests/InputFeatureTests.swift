@@ -898,4 +898,51 @@ final class InputFeatureTests: XCTestCase {
             XCTAssertEqual(keyPress.keys, [])
         }
     }
+
+    func testMiddleMouseDownMapsToV() {
+        it("should map middle mouse down to V") {
+            let keyPress = RecordingKeyPressService()
+            let mapper = MiddleMouseKeyMapper(keyPress: keyPress)
+
+            mapper.handleMouseEvent(type: .otherMouseDown, buttonNumber: 2)
+
+            XCTAssertEqual(keyPress.keys, ["v"])
+        }
+    }
+
+    func testMiddleMouseDownAndUpAreSuppressed() {
+        it("should suppress middle mouse down and up") {
+            let keyPress = RecordingKeyPressService()
+            let mapper = MiddleMouseKeyMapper(keyPress: keyPress)
+
+            let down = mapper.handleMouseEvent(type: .otherMouseDown, buttonNumber: 2)
+            let up = mapper.handleMouseEvent(type: .otherMouseUp, buttonNumber: 2)
+
+            XCTAssertEqual([down, up], [true, true])
+        }
+    }
+
+    func testOtherMouseButtonsPassThrough() {
+        it("should pass through other additional mouse buttons") {
+            let keyPress = RecordingKeyPressService()
+            let mapper = MiddleMouseKeyMapper(keyPress: keyPress)
+
+            let down = mapper.handleMouseEvent(type: .otherMouseDown, buttonNumber: 3)
+            let up = mapper.handleMouseEvent(type: .otherMouseUp, buttonNumber: 3)
+
+            XCTAssertEqual([down, up], [false, false])
+        }
+    }
+
+    func testMiddleMouseUpDoesNotSendAnotherV() {
+        it("should send V only once for a complete middle mouse click") {
+            let keyPress = RecordingKeyPressService()
+            let mapper = MiddleMouseKeyMapper(keyPress: keyPress)
+
+            mapper.handleMouseEvent(type: .otherMouseDown, buttonNumber: 2)
+            mapper.handleMouseEvent(type: .otherMouseUp, buttonNumber: 2)
+
+            XCTAssertEqual(keyPress.keys, ["v"])
+        }
+    }
 }

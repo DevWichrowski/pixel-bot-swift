@@ -45,6 +45,7 @@ let package = Package(
                 "Services/DiagnosticLogger.swift",
                 "Services/ConfigManager.swift",
                 "Services/KeyPressService.swift",
+                "Services/MiddleMouseKeyMapper.swift",
                 "Services/ScreenCaptureService.swift",
                 "Services/OCRPipeline.swift",
                 "Services/HPManaReader.swift",

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Tibia Domain Expert"
+  short_description: "Research current Tibia mechanics"
+  default_prompt: "Use $tibia-domain-expert to verify this Tibia mechanic with current sources."
+policy:
+  allow_implicit_invocation: true

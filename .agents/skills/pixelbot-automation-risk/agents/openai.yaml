@@ -1,0 +1,6 @@
+interface:
+  display_name: "PixelBot Automation Risk"
+  short_description: "Review automation and account risks"
+  default_prompt: "Use $pixelbot-automation-risk to perform a read-only risk assessment of this PixelBot code."
+policy:
+  allow_implicit_invocation: true

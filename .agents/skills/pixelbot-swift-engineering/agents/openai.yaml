@@ -1,0 +1,6 @@
+interface:
+  display_name: "PixelBot Swift Engineering"
+  short_description: "Build and review PixelBot Swift code"
+  default_prompt: "Use $pixelbot-swift-engineering to implement and verify this PixelBot Swift change."
+policy:
+  allow_implicit_invocation: true

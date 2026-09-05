@@ -30,6 +30,44 @@ final class CaptureOCRPipelineTests: XCTestCase {
         }
     }
 
+    func testWhiteTextPreprocessingRetainsAntialiasedGlyphEdges() throws {
+        try it("should retain off-white glyph edges without retaining saturated status bars") {
+            let bytes: [UInt8] = [
+                161, 161, 161, 255,
+                160, 160, 160, 255,
+                0, 255, 0, 255,
+                0, 0, 255, 255,
+            ]
+            let image = CGImage(
+                width: 4,
+                height: 1,
+                bitsPerComponent: 8,
+                bitsPerPixel: 32,
+                bytesPerRow: 16,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo.byteOrder32Big.union(
+                    CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+                ),
+                provider: CGDataProvider(data: Data(bytes) as CFData)!,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+            )!
+
+            let result = try OCRImagePreprocessor(strategy: .whiteText).process(image)
+
+            XCTAssertEqual(
+                [
+                    result.binaryBytes[0],
+                    result.binaryBytes[3],
+                    result.binaryBytes[6],
+                    result.binaryBytes[9],
+                ],
+                [0, 255, 255, 255]
+            )
+        }
+    }
+
     func testFastRecognitionWithoutFallback() {
         it("should accept a high confidence fast result without accurate OCR") {
             let recognizer = CaptureOCRRecognizerStub(
@@ -120,14 +158,117 @@ final class CaptureOCRPipelineTests: XCTestCase {
         }
     }
 
-    func testRealtimeNeverUsesAccurateFallback() {
-        it("should never invoke accurate OCR in realtime mode") {
+    func testRealtimeUsesRawAccurateFallbackForInvalidFastResult() {
+        it("should use raw accurate OCR after invalid fast OCR on a Retina frame") {
             let recognizer = CaptureOCRRecognizerStub(
-                fast: [[]],
+                fast: [captureOCRCandidate("10")],
                 accurate: [captureOCRCandidate("10/20")]
             )
             var pipeline = NumericRegionOCRPipeline(
                 format: .currentAndMaximum,
+                configured: true,
+                mode: .realtime,
+                recognizer: recognizer
+            )
+
+            let result = pipeline.process(
+                frame: makeCaptureOCRFrame(
+                    pattern: 0,
+                    width: 24,
+                    height: 12,
+                    sourceRect: CGRect(x: 0, y: 0, width: 12, height: 6)
+                ),
+                region: captureOCRFullRegion()
+            )
+
+            XCTAssertEqual(
+                ["current:\(result.confirmedCurrent ?? -1)"] + recognizer.requests,
+                ["current:10", "fast:72x36", "accurate:24x12"]
+            )
+        }
+    }
+
+    func testRealtimeRawFallbackStillRequiresTwoMatchingReads() {
+        it("should require two matching realtime reads when raw accurate OCR is needed") {
+            let timestamp = Date(timeIntervalSince1970: 900)
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [captureOCRCandidate("10"), captureOCRCandidate("10")],
+                accurate: [captureOCRCandidate("10/20"), captureOCRCandidate("10/20")]
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                mode: .realtime,
+                requiredConfirmations: 2,
+                recognizer: recognizer
+            )
+
+            let first = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0, timestamp: timestamp),
+                region: captureOCRFullRegion(),
+                now: timestamp
+            )
+            let second = pipeline.process(
+                frame: makeCaptureOCRFrame(
+                    pattern: 0,
+                    timestamp: timestamp.addingTimeInterval(0.030)
+                ),
+                region: captureOCRFullRegion(),
+                now: timestamp.addingTimeInterval(0.030)
+            )
+
+            XCTAssertEqual(
+                [
+                    "first:\(first.confirmedCurrent ?? -1)",
+                    "second:\(second.confirmedCurrent ?? -1)",
+                ] + recognizer.requests,
+                [
+                    "first:-1",
+                    "second:10",
+                    "fast:36x18",
+                    "accurate:12x6",
+                    "fast:36x18",
+                    "accurate:12x6",
+                ]
+            )
+        }
+    }
+
+    func testRealtimeRawFallbackRespectsFreshnessBoundary() {
+        it("should reject raw accurate OCR exactly at the 250 millisecond boundary") {
+            let timestamp = Date(timeIntervalSince1970: 950)
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [captureOCRCandidate("10")],
+                accurate: [captureOCRCandidate("10/20")]
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .currentAndMaximum,
+                configured: true,
+                mode: .realtime,
+                recognizer: recognizer
+            )
+
+            let result = pipeline.process(
+                frame: makeCaptureOCRFrame(pattern: 0, timestamp: timestamp),
+                region: captureOCRFullRegion(),
+                now: timestamp.addingTimeInterval(0.250)
+            )
+
+            XCTAssertEqual(
+                ["current:\(result.confirmedCurrent ?? -1)"] + recognizer.requests,
+                ["current:-1", "fast:36x18", "accurate:12x6"]
+            )
+        }
+    }
+
+    func testRealtimeSingleValueKeepsFastOnlyRecognition() {
+        it("should keep single value realtime OCR on the fast preprocessed path") {
+            let recognizer = CaptureOCRRecognizerStub(
+                fast: [captureOCRCandidate("ammo")],
+                accurate: [captureOCRCandidate("42")]
+            )
+            var pipeline = NumericRegionOCRPipeline(
+                format: .singleValue,
                 configured: true,
                 mode: .realtime,
                 recognizer: recognizer
@@ -138,7 +279,7 @@ final class CaptureOCRPipelineTests: XCTestCase {
                 region: captureOCRFullRegion()
             )
 
-            XCTAssertEqual(recognizer.calls, [.fast])
+            XCTAssertEqual(recognizer.requests, ["fast:36x18"])
         }
     }
 
