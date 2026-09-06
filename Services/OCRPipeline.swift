@@ -92,7 +92,7 @@ enum OCRPreprocessorError: Error {
     case imageCreationFailed
 }
 
-enum OCRPreprocessingStrategy {
+enum OCRPreprocessingStrategy: UInt8 {
     case adaptiveLuminance
     case whiteText
 }
@@ -168,6 +168,7 @@ struct OCRImagePreprocessor {
                 let isWhiteText = red > Self.whiteTextThreshold
                     && green > Self.whiteTextThreshold
                     && blue > Self.whiteTextThreshold
+                    && max(red, green, blue) - min(red, green, blue) <= 40
                 whiteTextBytes[pixel] = isWhiteText ? 0 : 255
             }
             binaryBytes = whiteTextBytes
@@ -194,7 +195,7 @@ struct OCRImagePreprocessor {
         return PreprocessedRegion(
             image: binaryImage,
             binaryBytes: binaryBytes,
-            hash: stableHash(bytes: binaryBytes, width: width, height: height)
+            hash: stableHash(bytes: bgraBytes + [strategy.rawValue], width: width, height: height)
         )
     }
 
@@ -259,6 +260,7 @@ struct OCRImagePreprocessor {
 
 enum NumericOCRFormat: Sendable {
     case currentAndMaximum
+    case manaAndShield
     case singleValue
 }
 
@@ -275,6 +277,8 @@ struct NumericOCRParser {
         let normalized = normalize(text)
 
         switch format {
+        case .manaAndShield:
+            return ManaOCRParser().parse(text).mana
         case .currentAndMaximum:
             if let match = Self.currentMaximumRegex.firstMatch(
                 in: normalized,
@@ -367,6 +371,44 @@ struct NumericOCRParser {
     }
 }
 
+struct ParsedManaReadout: Equatable, Sendable {
+    let mana: ParsedNumericValue?
+    let shield: ParsedNumericValue?
+}
+
+/// Parentheses delimit a separate field. Never salvage a shield-only pair as mana.
+struct ManaOCRParser {
+    func parse(_ text: String) -> ParsedManaReadout {
+        let parser = NumericOCRParser()
+        let normalized = parser.normalize(text)
+            .replacingOccurrences(of: "{", with: "(")
+            .replacingOccurrences(of: "[", with: "(")
+            .replacingOccurrences(of: "}", with: ")")
+            .replacingOccurrences(of: "]", with: ")")
+        let parts = normalized.split(separator: "(", maxSplits: 1, omittingEmptySubsequences: false)
+        let mana = parsePair(String(parts[0]))
+        guard parts.count == 2, parts[1].hasSuffix(")") else {
+            return ParsedManaReadout(mana: mana, shield: nil)
+        }
+        let shield = parsePair(String(parts[1].dropLast()))
+        return ParsedManaReadout(mana: mana, shield: shield)
+    }
+
+    private func parsePair(_ text: String) -> ParsedNumericValue? {
+        let parser = NumericOCRParser()
+        if text.contains("/") {
+            return parser.parse(text, format: .currentAndMaximum)
+        }
+        guard (3...11).contains(text.count), text.allSatisfy({ ("0"..."9").contains($0) }) else { return nil }
+        let candidates = text.indices.compactMap { index -> ParsedNumericValue? in
+            guard text[index] == "1" else { return nil }
+            return parser.parse(String(text[..<index]) + "/" + String(text[text.index(after: index)...]), format: .currentAndMaximum)
+        }
+        return candidates.count == 1 ? candidates[0] : nil
+    }
+
+}
+
 enum OCRRecognitionMode: Equatable, Sendable {
     case fast
     case accurate
@@ -380,6 +422,8 @@ enum OCRPipelineMode: Equatable, Sendable {
 struct OCRTextCandidate: Equatable, Sendable {
     let text: String
     let confidence: Float
+    var bounds: CGRect? = nil
+    var isLeading: Bool = true
 }
 
 protocol OCRTextRecognizing: AnyObject {
@@ -400,38 +444,26 @@ final class VisionTextRecognizer: OCRTextRecognizing {
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
         try handler.perform([request])
 
-        let observations = request.results ?? []
-        var primaryCandidates: [VNRecognizedText] = []
-        primaryCandidates.reserveCapacity(min(3, observations.count))
-        for observation in observations.prefix(3) {
-            if let candidate = observation.topCandidates(1).first {
-                primaryCandidates.append(candidate)
-            }
-        }
-
+        let observations = (request.results ?? []).sorted { $0.boundingBox.minX < $1.boundingBox.minX }
+        guard let first = observations.first else { return [] }
+        // Retain left-to-right geometry. A right-hand observation cannot independently
+        // become the leading numeric field when the mana observation was rejected.
+        let row = observations.filter { abs($0.boundingBox.midY - first.boundingBox.midY) < 0.25 }
         var candidates: [OCRTextCandidate] = []
-        candidates.reserveCapacity(3)
-
-        if primaryCandidates.count > 1 {
-            candidates.append(
-                OCRTextCandidate(
-                    text: primaryCandidates.map(\.string).joined(),
-                    confidence: primaryCandidates.map(\.confidence).min() ?? 0
-                )
-            )
-        }
-
-        for observation in observations {
-            for candidate in observation.topCandidates(3) {
-                guard candidates.count < 3 else { return candidates }
-                let value = OCRTextCandidate(text: candidate.string, confidence: candidate.confidence)
-                if !candidates.contains(value) {
-                    candidates.append(value)
-                }
+        for rank in 0..<3 {
+            let texts = row.compactMap { observation -> VNRecognizedText? in
+                let alternatives = observation.topCandidates(3)
+                return alternatives.indices.contains(rank) ? alternatives[rank] : alternatives.first
+            }
+            if !texts.isEmpty {
+                candidates.append(OCRTextCandidate(
+                    text: texts.map(\.string).joined(separator: " "),
+                    confidence: texts.map(\.confidence).min() ?? 0,
+                    bounds: row.reduce(first.boundingBox) { $0.union($1.boundingBox) }
+                ))
             }
         }
-
-        return Array(candidates.prefix(3))
+        return candidates
     }
 
     private static func makeRequest(level: VNRequestTextRecognitionLevel) -> VNRecognizeTextRequest {
@@ -460,6 +492,7 @@ struct NumericRegionOCRPipeline {
         let value: ParsedNumericValue
         let text: String
         let confidence: Float
+        var shieldValue: ParsedNumericValue? = nil
     }
 
     private let format: NumericOCRFormat
@@ -469,8 +502,10 @@ struct NumericRegionOCRPipeline {
     private let parser = NumericOCRParser()
     private let preprocessor: OCRImagePreprocessor
 
+    private(set) var shield = ShieldReadout()
     private(set) var readout: NumericReadout
     private(set) var diagnostic: RegionDiagnostic
+    private var frameCaptureUptime: TimeInterval?
     private var acceptedHash: UInt64?
     private var acceptedCandidate: AcceptedCandidate?
     private var pendingMaximum: Int?
@@ -492,7 +527,7 @@ struct NumericRegionOCRPipeline {
         self.requiredConfirmations = max(1, requiredConfirmations)
         self.recognizer = recognizer
         switch format {
-        case .currentAndMaximum:
+        case .currentAndMaximum, .manaAndShield:
             preprocessor = OCRImagePreprocessor(strategy: .whiteText)
         case .singleValue:
             preprocessor = OCRImagePreprocessor(strategy: .adaptiveLuminance)
@@ -503,6 +538,7 @@ struct NumericRegionOCRPipeline {
     }
 
     mutating func reset(configured: Bool) {
+        shield = ShieldReadout()
         let state: NumericReadoutState = configured ? .invalid : .unconfigured
         readout = NumericReadout(state: state)
         diagnostic = RegionDiagnostic(state: state)
@@ -521,7 +557,9 @@ struct NumericRegionOCRPipeline {
         region: CaptureRegion,
         now: Date? = nil
     ) -> RegionOCRProcessResult {
+        frameCaptureUptime = frame.captureUptime
         let startTime = ProcessInfo.processInfo.systemUptime
+        shield = ShieldReadout()
 
         do {
             let rawImage = try PixelBufferRegionCropper.crop(region, from: frame)
@@ -532,6 +570,7 @@ struct NumericRegionOCRPipeline {
             if preprocessed.hash == acceptedHash,
                let acceptedCandidate,
                requiredConfirmations == 1 || confirmedValue == acceptedCandidate.value {
+                DiagnosticMetrics.shared.record(.cacheHits)
                 let latency = ProcessInfo.processInfo.systemUptime - startTime
                 let evaluatedAt = now ?? Date()
                 guard isFresh(frame: frame, at: evaluatedAt) else {
@@ -584,6 +623,7 @@ struct NumericRegionOCRPipeline {
             let evaluatedAt = now ?? Date()
 
             guard let selected = recognition.selected else {
+                DiagnosticMetrics.shared.record(.recognitionFailures)
                 pendingMaximum = nil
                 pendingMaximumCount = 0
                 resetPendingConfirmation(invalidateConfirmedValue: true)
@@ -699,7 +739,6 @@ struct NumericRegionOCRPipeline {
         ).prefix(3)
         let fastSelection = bestValidCandidate(in: fastCandidates)
         var allCandidates = Array(fastCandidates)
-        var selections = fastSelection.map { [$0] } ?? []
         var modes: [OCRRecognitionMode] = [.fast]
 
         let shouldUseAccurateFallback: Bool
@@ -710,6 +749,10 @@ struct NumericRegionOCRPipeline {
                 || (mode == .diagnostic
                     && (fastSelection?.confidence ?? 0) < Self.accurateFallbackThreshold)
             accurateImage = rawImage
+        case .manaAndShield:
+            shouldUseAccurateFallback = fastSelection == nil
+                || fastSelection?.shieldValue == nil
+            accurateImage = preprocessedImage
         case .singleValue:
             shouldUseAccurateFallback = mode == .diagnostic
                 && (fastSelection == nil
@@ -717,20 +760,16 @@ struct NumericRegionOCRPipeline {
             accurateImage = preprocessedImage
         }
         if shouldUseAccurateFallback {
+            DiagnosticMetrics.shared.record(.recognitionFallbacks)
             let accurateCandidates = (try? recognizer.recognize(
                 in: accurateImage,
                 mode: .accurate
             ))?.prefix(3) ?? []
             modes.append(.accurate)
             allCandidates.append(contentsOf: accurateCandidates)
-            if let accurateSelection = bestValidCandidate(in: accurateCandidates) {
-                selections.append(accurateSelection)
-            }
         }
 
-        let selected = selections.max { left, right in
-            left.confidence < right.confidence
-        }
+        let selected = bestValidCandidate(in: allCandidates)
         let diagnosticCandidate = allCandidates.max { left, right in
             left.confidence < right.confidence
         }
@@ -739,16 +778,27 @@ struct NumericRegionOCRPipeline {
 
     private func bestValidCandidate<C: Collection>(in candidates: C) -> AcceptedCandidate?
     where C.Element == OCRTextCandidate {
-        candidates.compactMap { candidate -> AcceptedCandidate? in
-            guard let value = parser.parse(candidate.text, format: format) else { return nil }
+        let validCandidates = candidates.compactMap { candidate -> AcceptedCandidate? in
+            guard candidate.isLeading,
+                  format != .manaAndShield || (candidate.bounds?.minX ?? 0) < 0.5,
+                  let value = parser.parse(candidate.text, format: format) else { return nil }
             return AcceptedCandidate(
                 value: value,
                 text: candidate.text,
-                confidence: candidate.confidence
+                confidence: candidate.confidence,
+                shieldValue: format == .manaAndShield ? ManaOCRParser().parse(candidate.text).shield : nil
             )
-        }.max { left, right in
-            left.confidence < right.confidence
         }
+        guard var best = validCandidates.max(by: { $0.confidence < $1.confidence }) else { return nil }
+        guard format == .manaAndShield else { return best }
+        let complete = validCandidates.filter { $0.shieldValue != nil }
+        guard validCandidates.allSatisfy({ $0.value == best.value }),
+              let capacity = complete.first?.shieldValue,
+              complete.allSatisfy({ $0.shieldValue == capacity }) else {
+            best.shieldValue = nil
+            return best
+        }
+        return complete.max(by: { $0.confidence < $1.confidence })
     }
 
     @discardableResult
@@ -810,7 +860,7 @@ struct NumericRegionOCRPipeline {
         let confirmationAge = pendingValueTimestamp.map { timestamp.timeIntervalSince($0) }
         if pendingValue == value,
            let confirmationAge,
-           confirmationAge >= 0,
+           confirmationAge > 0,
            confirmationAge < Self.staleInterval {
             pendingValueCount += 1
         } else {
@@ -826,7 +876,8 @@ struct NumericRegionOCRPipeline {
     }
 
     private func isFresh(frame: CapturedFrame, at date: Date) -> Bool {
-        date.timeIntervalSince(frame.timestamp) < Self.staleInterval
+        (frame.captureUptime.map { ProcessInfo.processInfo.systemUptime - $0 }
+            ?? date.timeIntervalSince(frame.timestamp)) < Self.staleInterval
     }
 
     private mutating func invalidateConfirmedValueIfReadoutIsStale(at date: Date) {
@@ -852,6 +903,12 @@ struct NumericRegionOCRPipeline {
         timestamp: Date,
         latency: TimeInterval
     ) {
+        if format == .manaAndShield, let capacity = candidate.shieldValue {
+            shield = ShieldReadout(captureUptime: frameCaptureUptime, current: capacity.current, maximum: capacity.maximum,
+                                   confidence: candidate.confidence, timestamp: timestamp,
+                                   state: capacity.current > 0 ? .active : .inactive)
+        }
+        readout.captureUptime = frameCaptureUptime
         readout.current = candidate.value.current
         readout.confidence = candidate.confidence
         readout.timestamp = timestamp
@@ -861,9 +918,7 @@ struct NumericRegionOCRPipeline {
     }
 
     private mutating func markInvalidIfNeeded() {
-        if readout.current == nil {
-            readout.state = .invalid
-        }
+        readout.state = .invalid
     }
 
     private func result(

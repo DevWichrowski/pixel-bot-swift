@@ -44,6 +44,9 @@ extension RegionConfig {
 
 /// Healer configuration
 struct HealerConfig: Codable {
+    var vocation: HealingVocation?
+    var healAction: HealingAction?
+    var criticalAction: HealingAction?
     var healEnabled: Bool = true
     var healThreshold: Int = 75
     var healHotkey: String = "F1"
@@ -61,10 +64,13 @@ struct HealerConfig: Codable {
     var manaHotkey: String = "F4"
     
     // Cooldown settings
-    var spellCooldown: Double = 1.0    // Persisted for compatibility; runtime value is fixed at 1.0 s
+    var spellCooldown: Double = 1.0    // Legacy value retained; runtime timing comes from selected actions
     var potionCooldown: Double = 0.5   // Cooldown for potions (mana + critical when is potion)
 
     private enum CodingKeys: String, CodingKey {
+        case vocation
+        case healAction
+        case criticalAction
         case healEnabled
         case healThreshold
         case healHotkey
@@ -87,6 +93,9 @@ extension HealerConfig {
     init(from decoder: Decoder) throws {
         let defaults = HealerConfig()
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        vocation = try container.decodeIfPresent(HealingVocation.self, forKey: .vocation)
+        healAction = try container.decodeIfPresent(HealingAction.self, forKey: .healAction)
+        criticalAction = try container.decodeIfPresent(HealingAction.self, forKey: .criticalAction)
         healEnabled = try container.decodeIfPresent(Bool.self, forKey: .healEnabled) ?? defaults.healEnabled
         healThreshold = try container.decodeIfPresent(Int.self, forKey: .healThreshold) ?? defaults.healThreshold
         healHotkey = try container.decodeIfPresent(String.self, forKey: .healHotkey) ?? defaults.healHotkey
@@ -100,9 +109,23 @@ extension HealerConfig {
         manaEnabled = try container.decodeIfPresent(Bool.self, forKey: .manaEnabled) ?? defaults.manaEnabled
         manaThreshold = try container.decodeIfPresent(Int.self, forKey: .manaThreshold) ?? defaults.manaThreshold
         manaHotkey = try container.decodeIfPresent(String.self, forKey: .manaHotkey) ?? defaults.manaHotkey
-        _ = try container.decodeIfPresent(Double.self, forKey: .spellCooldown)
-        spellCooldown = 1.0
+        spellCooldown = try container.decodeIfPresent(Double.self, forKey: .spellCooldown) ?? defaults.spellCooldown
         potionCooldown = try container.decodeIfPresent(Double.self, forKey: .potionCooldown) ?? defaults.potionCooldown
+    }
+}
+
+struct MagicShieldConfig: Codable {
+    var enabled = false
+    var hotkey = "R"
+    var threshold = 25
+
+    private enum CodingKeys: String, CodingKey { case enabled, hotkey, threshold }
+    init() {}
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        hotkey = try container.decodeIfPresent(String.self, forKey: .hotkey) ?? "R"
+        threshold = try container.decodeIfPresent(Int.self, forKey: .threshold) ?? 25
     }
 }
 
@@ -222,6 +245,7 @@ struct PresetConfig: Codable, Identifiable {
     var healer: HealerConfig = HealerConfig()
     var eater: EaterConfig = EaterConfig()
     var haste: HasteConfig = HasteConfig()
+    var magicShield = MagicShieldConfig()
     var skinner: SkinnerConfig = SkinnerConfig()
     var combo: ComboConfig = ComboConfig()
 
@@ -232,22 +256,23 @@ struct PresetConfig: Codable, Identifiable {
         case healer
         case eater
         case haste
+        case magicShield
         case skinner
         case combo
     }
     
     /// Create preset from current config
     static func fromConfig(_ config: UserConfig, name: String) -> PresetConfig {
-        var preset = PresetConfig(
+        let preset = PresetConfig(
             name: name,
             regions: config.regions,
             healer: config.healer,
             eater: config.eater,
             haste: config.haste,
+            magicShield: config.magicShield,
             skinner: config.skinner,
             combo: config.combo
         )
-        preset.healer.spellCooldown = 1.0
         return preset
     }
 }
@@ -261,6 +286,7 @@ extension PresetConfig {
         healer = try container.decodeIfPresent(HealerConfig.self, forKey: .healer) ?? HealerConfig()
         eater = try container.decodeIfPresent(EaterConfig.self, forKey: .eater) ?? EaterConfig()
         haste = try container.decodeIfPresent(HasteConfig.self, forKey: .haste) ?? HasteConfig()
+        magicShield = try container.decodeIfPresent(MagicShieldConfig.self, forKey: .magicShield) ?? MagicShieldConfig()
         skinner = try container.decodeIfPresent(SkinnerConfig.self, forKey: .skinner) ?? SkinnerConfig()
         combo = try container.decodeIfPresent(ComboConfig.self, forKey: .combo) ?? ComboConfig()
     }
@@ -272,6 +298,7 @@ struct UserConfig: Codable {
     var healer: HealerConfig = HealerConfig()
     var eater: EaterConfig = EaterConfig()
     var haste: HasteConfig = HasteConfig()
+    var magicShield = MagicShieldConfig()
     var skinner: SkinnerConfig = SkinnerConfig()
     var combo: ComboConfig = ComboConfig()
     
@@ -284,6 +311,7 @@ struct UserConfig: Codable {
         case healer
         case eater
         case haste
+        case magicShield
         case skinner
         case combo
         case presets
@@ -294,9 +322,9 @@ struct UserConfig: Codable {
     mutating func applyPreset(_ preset: PresetConfig) {
         regions = preset.regions
         healer = preset.healer
-        healer.spellCooldown = 1.0
         eater = preset.eater
         haste = preset.haste
+        magicShield = preset.magicShield
         skinner = preset.skinner
         combo = preset.combo
         activePresetId = preset.id
@@ -307,9 +335,9 @@ struct UserConfig: Codable {
         guard let index = presets.firstIndex(where: { $0.id == id }) else { return }
         presets[index].regions = regions
         presets[index].healer = healer
-        presets[index].healer.spellCooldown = 1.0
         presets[index].eater = eater
         presets[index].haste = haste
+        presets[index].magicShield = magicShield
         presets[index].skinner = skinner
         presets[index].combo = combo
     }
@@ -320,12 +348,7 @@ struct UserConfig: Codable {
         return presets.first { $0.id == id }
     }
 
-    mutating func normalizeHealingCooldown() {
-        healer.spellCooldown = 1.0
-        for index in presets.indices {
-            presets[index].healer.spellCooldown = 1.0
-        }
-    }
+
 }
 
 extension UserConfig {
@@ -335,6 +358,7 @@ extension UserConfig {
         healer = try container.decodeIfPresent(HealerConfig.self, forKey: .healer) ?? HealerConfig()
         eater = try container.decodeIfPresent(EaterConfig.self, forKey: .eater) ?? EaterConfig()
         haste = try container.decodeIfPresent(HasteConfig.self, forKey: .haste) ?? HasteConfig()
+        magicShield = try container.decodeIfPresent(MagicShieldConfig.self, forKey: .magicShield) ?? MagicShieldConfig()
         skinner = try container.decodeIfPresent(SkinnerConfig.self, forKey: .skinner) ?? SkinnerConfig()
         combo = try container.decodeIfPresent(ComboConfig.self, forKey: .combo) ?? ComboConfig()
         presets = try container.decodeIfPresent([PresetConfig].self, forKey: .presets) ?? []

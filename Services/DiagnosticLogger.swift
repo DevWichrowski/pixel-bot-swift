@@ -32,6 +32,7 @@ final class PixelBotDiagnosticLogger: DiagnosticLogging, @unchecked Sendable {
     private let directoryURL: URL
     private let maximumFileSize: Int
     private let encoder = JSONEncoder()
+    private let dateFormatter = ISO8601DateFormatter()
     private let fileManager: FileManager
 
     private var currentURL: URL {
@@ -69,10 +70,11 @@ final class PixelBotDiagnosticLogger: DiagnosticLogging, @unchecked Sendable {
     }
 
     func log(_ event: String, fields: [String: DiagnosticLogValue] = [:]) {
-        let wallTime = ISO8601DateFormatter().string(from: Date())
+        let timestamp = Date()
         let uptime = ProcessInfo.processInfo.systemUptime
         queue.async { [weak self] in
-            self?.write(event: event, wallTime: wallTime, uptime: uptime, fields: fields)
+            guard let self else { return }
+            self.write(event: event, wallTime: self.dateFormatter.string(from: timestamp), uptime: uptime, fields: fields)
         }
     }
 
@@ -123,5 +125,50 @@ final class PixelBotDiagnosticLogger: DiagnosticLogging, @unchecked Sendable {
             try fileManager.removeItem(at: previousURL)
         }
         try fileManager.moveItem(at: currentURL, to: previousURL)
+    }
+}
+
+/// Cumulative measurements, kept off the per-frame disk logging path.
+final class DiagnosticMetrics: @unchecked Sendable {
+    enum Counter: String, CaseIterable, Sendable {
+        case recognitionFailures
+        case recognitionFallbacks
+        case cacheHits
+        case droppedFrames
+        case invalidFrameTiming
+    }
+
+    static let shared = DiagnosticMetrics()
+    private let lock = NSLock()
+    private var counters: [Counter: Int] = [:]
+    private var latencyCount = 0
+    private var latencyTotal: TimeInterval = 0
+    private var latencyMaximum: TimeInterval = 0
+
+    func record(_ counter: Counter) {
+        lock.lock()
+        defer { lock.unlock() }
+        counters[counter, default: 0] += 1
+    }
+
+    func recordCaptureToKeyDown(seconds: TimeInterval) {
+        guard seconds.isFinite, seconds >= 0 else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        latencyCount += 1
+        latencyTotal += seconds
+        latencyMaximum = max(latencyMaximum, seconds)
+    }
+
+    func snapshot() -> [String: DiagnosticLogValue] {
+        lock.lock()
+        defer { lock.unlock() }
+        var fields = Dictionary(uniqueKeysWithValues: Counter.allCases.map {
+            ($0.rawValue, DiagnosticLogValue.integer(counters[$0, default: 0]))
+        })
+        fields["captureToKeyDownCount"] = .integer(latencyCount)
+        fields["captureToKeyDownMeanMs"] = .double(latencyCount > 0 ? latencyTotal * 1000 / Double(latencyCount) : 0)
+        fields["captureToKeyDownMaximumMs"] = .double(latencyMaximum * 1000)
+        return fields
     }
 }

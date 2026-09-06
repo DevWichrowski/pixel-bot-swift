@@ -1,8 +1,10 @@
 import CoreGraphics
 import Foundation
 
-/// Replaces global middle mouse clicks with the V key while PixelBot is open.
+/// Maps middle clicks to V only while enabled for the selected foreground client.
 final class MiddleMouseKeyMapper {
+    var enabled = false
+    var inputAllowed: () -> Bool = { true }
     private static let middleButtonNumber: Int64 = 2
 
     private let keyPress: any KeyPressServicing
@@ -64,6 +66,7 @@ final class MiddleMouseKeyMapper {
 
         guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
             CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
             return false
         }
 
@@ -78,6 +81,7 @@ final class MiddleMouseKeyMapper {
     func stop() {
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
         }
         if let source = runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
@@ -95,7 +99,7 @@ final class MiddleMouseKeyMapper {
     /// Returns true when the original mouse event should be suppressed.
     @discardableResult
     func handleMouseEvent(type: CGEventType, buttonNumber: Int64) -> Bool {
-        guard buttonNumber == Self.middleButtonNumber else { return false }
+        guard enabled, inputAllowed(), buttonNumber == Self.middleButtonNumber else { return false }
 
         if type == .otherMouseDown {
             keyPress.pressKey("v", priority: .regular, group: keyPressGroup)

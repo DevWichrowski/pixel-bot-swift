@@ -3,6 +3,7 @@ import Foundation
 struct HPManaFrameReadout: Sendable {
     let hp: NumericReadout
     let mana: NumericReadout
+    var shield: ShieldReadout = ShieldReadout()
     let hpConfirmedCurrent: Int?
     let manaConfirmedCurrent: Int?
     let generation: UInt64
@@ -37,6 +38,9 @@ final class HPManaReader: @unchecked Sendable {
     private let diagnosticStateLock = NSLock()
     private var lastLoggedIssueSignatures: [CaptureRegionKind: String] = [:]
 
+    private var lastIssueLogTimes: [CaptureRegionKind: TimeInterval] = [:]
+    private var lastIssueStates: [CaptureRegionKind: NumericReadoutState] = [:]
+
     var debugMode = false
 
     init(
@@ -49,11 +53,11 @@ final class HPManaReader: @unchecked Sendable {
         hpPipeline = NumericRegionOCRPipeline(
             format: .currentAndMaximum,
             mode: mode,
-            requiredConfirmations: hpRequiredConfirmations ?? (mode == .realtime ? 2 : 1),
+            requiredConfirmations: hpRequiredConfirmations ?? 1,
             recognizer: recognizerFactory()
         )
         manaPipeline = NumericRegionOCRPipeline(
-            format: .currentAndMaximum,
+            format: .manaAndShield,
             mode: mode,
             recognizer: recognizerFactory()
         )
@@ -111,6 +115,8 @@ final class HPManaReader: @unchecked Sendable {
         }
         diagnosticStateLock.withLock {
             lastLoggedIssueSignatures.removeAll(keepingCapacity: true)
+            lastIssueLogTimes.removeAll(keepingCapacity: true)
+            lastIssueStates.removeAll(keepingCapacity: true)
         }
     }
 
@@ -200,6 +206,7 @@ final class HPManaReader: @unchecked Sendable {
             return HPManaFrameReadout(
                 hp: hpReadout,
                 mana: manaReadout,
+                shield: manaPipeline.shield,
                 hpConfirmedCurrent: hpReadout.state == .valid
                     ? hpResult?.confirmedCurrent
                     : nil,
@@ -218,6 +225,14 @@ final class HPManaReader: @unchecked Sendable {
             case .mana: manaPipeline.readout(at: date)
             case .ammo: NumericReadout()
             }
+        }
+    }
+
+    func shieldReadout(at date: Date = Date()) -> ShieldReadout {
+        lock.withLock {
+            var result = manaPipeline.shield
+            result.state = result.state(at: date)
+            return result
         }
     }
 
@@ -243,6 +258,8 @@ final class HPManaReader: @unchecked Sendable {
         }
         diagnosticStateLock.withLock {
             lastLoggedIssueSignatures.removeAll(keepingCapacity: true)
+            lastIssueLogTimes.removeAll(keepingCapacity: true)
+            lastIssueStates.removeAll(keepingCapacity: true)
         }
     }
 
@@ -272,7 +289,7 @@ final class HPManaReader: @unchecked Sendable {
         now: Date
     ) {
         guard let result else { return }
-        let frameAge = max(0, now.timeIntervalSince(frame.timestamp))
+        let frameAge = max(0, frame.captureUptime.map { ProcessInfo.processInfo.systemUptime - $0 } ?? now.timeIntervalSince(frame.timestamp))
         let isSlow = result.diagnostic.latency >= 0.150
         let isOld = frameAge >= NumericRegionOCRPipeline.staleInterval
         let isInvalid = result.confirmedCurrent == nil
@@ -281,6 +298,7 @@ final class HPManaReader: @unchecked Sendable {
         guard isSlow || isOld || isInvalid || isLowConfidence else {
             diagnosticStateLock.withLock {
                 lastLoggedIssueSignatures[kind] = nil
+                lastIssueStates[kind] = nil
             }
             return
         }
@@ -294,7 +312,12 @@ final class HPManaReader: @unchecked Sendable {
         ].joined(separator: ":")
         let shouldLog = diagnosticStateLock.withLock { () -> Bool in
             guard lastLoggedIssueSignatures[kind] != signature else { return false }
+            let uptime = ProcessInfo.processInfo.systemUptime
+            let stateChanged = lastIssueStates[kind] != result.readout.state
+            guard stateChanged || uptime - (lastIssueLogTimes[kind] ?? -.infinity) >= 0.100 else { return false }
             lastLoggedIssueSignatures[kind] = signature
+            lastIssueLogTimes[kind] = uptime
+            lastIssueStates[kind] = result.readout.state
             return true
         }
         guard shouldLog else { return }

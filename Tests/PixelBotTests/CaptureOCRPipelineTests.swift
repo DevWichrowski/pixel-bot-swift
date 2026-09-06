@@ -1,4 +1,6 @@
 import XCTest
+import AppKit
+import CoreText
 @testable import PixelBot
 
 final class CaptureOCRPipelineTests: XCTestCase {
@@ -652,6 +654,98 @@ final class CaptureOCRPipelineTests: XCTestCase {
             )
         }
     }
+    func testShieldPipelineReportsActiveCapacity() {
+        it("should expose active shield capacity from the production mana pipeline") {
+            let now = Date()
+            let recognizer = CaptureOCRRecognizerStub(fast: [captureOCRCandidate("1913/2790 (1633/1633)")])
+            var pipeline = NumericRegionOCRPipeline(format: .manaAndShield, configured: true, recognizer: recognizer)
+            _ = pipeline.process(frame: makeCaptureOCRFrame(pattern: 0, timestamp: now), region: captureOCRFullRegion(), now: now)
+            XCTAssertEqual(pipeline.shield, ShieldReadout(current: 1633, maximum: 1633, confidence: 0.9, timestamp: now, state: .active))
+        }
+    }
+
+    func testShieldFailureInvalidatesPreviousInactivity() {
+        it("should invalidate shield evidence when the next frame is unreadable") {
+            let now = Date()
+            let recognizer = CaptureOCRRecognizerStub(fast: [captureOCRCandidate("1915/2790 (0/0)"), captureOCRCandidate("1913/2790 (?")])
+            var pipeline = NumericRegionOCRPipeline(format: .manaAndShield, configured: true, recognizer: recognizer)
+            _ = pipeline.process(frame: makeCaptureOCRFrame(pattern: 0, timestamp: now), region: captureOCRFullRegion(), now: now)
+            _ = pipeline.process(frame: makeCaptureOCRFrame(pattern: 1, timestamp: now.addingTimeInterval(0.01)), region: captureOCRFullRegion(), now: now.addingTimeInterval(0.01))
+            XCTAssertEqual(pipeline.shield.state, .unknown)
+        }
+    }
+
+    func testRightHandShieldCannotBecomeMana() {
+        it("should reject a right-hand shield observation lacking its parentheses") {
+            let candidate = OCRTextCandidate(text: "1633/1633", confidence: 1, bounds: CGRect(x: 0.6, y: 0, width: 0.3, height: 0.8))
+            let recognizer = CaptureOCRRecognizerStub(fast: [[candidate]])
+            var pipeline = NumericRegionOCRPipeline(format: .manaAndShield, configured: true, recognizer: recognizer)
+            let result = pipeline.process(frame: makeCaptureOCRFrame(pattern: 0), region: captureOCRFullRegion())
+            XCTAssertNil(result.confirmedCurrent)
+        }
+    }
+    func testSyntheticManaImagesThroughVision() throws {
+        try it("should recognize separate mana and shield fields in synthetic white-text images") {
+            let inputs = ["1915/2790 (0/0)", "1913/2790 (1633/1633)"]
+            let values = try inputs.map { text -> ParsedManaReadout? in
+                let context = try XCTUnwrap(CGContext(data: nil, width: 360, height: 44,
+                    bitsPerComponent: 8, bytesPerRow: 360 * 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                context.setFillColor(CGColor(gray: 0.08, alpha: 1))
+                context.fill(CGRect(x: 0, y: 0, width: 360, height: 44))
+                // A colored shield-like icon is deliberately excluded by the white mask.
+                context.setFillColor(CGColor(red: 0.1, green: 0.7, blue: 0.9, alpha: 1))
+                context.fillEllipse(in: CGRect(x: 5, y: 11, width: 14, height: 20))
+                let attributed = NSAttributedString(string: text, attributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 20, weight: .regular),
+                    .foregroundColor: NSColor.white
+                ])
+                context.textPosition = CGPoint(x: 25, y: 12)
+                CTLineDraw(CTLineCreateWithAttributedString(attributed), context)
+                let raw = try XCTUnwrap(context.makeImage())
+                let mask = try OCRImagePreprocessor(strategy: .whiteText).process(raw)
+                let candidates = try VisionTextRecognizer().recognize(in: mask.image, mode: .accurate)
+                return candidates.map { ManaOCRParser().parse($0.text) }.first { $0.mana != nil && $0.shield != nil }
+            }
+            XCTAssertEqual(values, [
+                ParsedManaReadout(mana: ParsedNumericValue(current: 1915, maximum: 2790), shield: ParsedNumericValue(current: 0, maximum: 0)),
+                ParsedManaReadout(mana: ParsedNumericValue(current: 1913, maximum: 2790), shield: ParsedNumericValue(current: 1633, maximum: 1633))
+            ])
+        }
+    }
+
+    func testAccurateShieldCompletesMatchingMana() {
+        it("should retain readable accurate shield evidence when matching fast mana has higher confidence") {
+            let recognizer = CaptureOCRRecognizerStub(fast: [captureOCRCandidate("1913/2790", confidence: 1)],
+                                                      accurate: [captureOCRCandidate("1913/2790 (1633/1633)", confidence: 0.8)])
+            var pipeline = NumericRegionOCRPipeline(format: .manaAndShield, configured: true, recognizer: recognizer)
+            _ = pipeline.process(frame: makeCaptureOCRFrame(pattern: 0), region: captureOCRFullRegion())
+            XCTAssertEqual(pipeline.shield.state, .active)
+        }
+    }
+
+    func testConflictingManaMakesShieldUnknown() {
+        it("should suppress shield evidence when recognition modes disagree on mana") {
+            let recognizer = CaptureOCRRecognizerStub(fast: [captureOCRCandidate("1913/2790", confidence: 1)],
+                                                      accurate: [captureOCRCandidate("1915/2790 (0/0)", confidence: 0.8)])
+            var pipeline = NumericRegionOCRPipeline(format: .manaAndShield, configured: true, recognizer: recognizer)
+            _ = pipeline.process(frame: makeCaptureOCRFrame(pattern: 0), region: captureOCRFullRegion())
+            XCTAssertEqual(pipeline.shield.state, .unknown)
+        }
+    }
+
+    func testConflictingShieldAlternativesRemainUnknown() {
+        it("should suppress contradictory shield capacities even when mana agrees") {
+            let recognizer = CaptureOCRRecognizerStub(fast: [[
+                OCRTextCandidate(text: "1913/2790 (0/0)", confidence: 1),
+                OCRTextCandidate(text: "1913/2790 (1633/1633)", confidence: 0.8)
+            ]])
+            var pipeline = NumericRegionOCRPipeline(format: .manaAndShield, configured: true, recognizer: recognizer)
+            _ = pipeline.process(frame: makeCaptureOCRFrame(pattern: 0), region: captureOCRFullRegion())
+            XCTAssertEqual(pipeline.shield.state, .unknown)
+        }
+    }
+
 }
 
 private enum CaptureOCRThrownError: Error {

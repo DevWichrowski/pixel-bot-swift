@@ -8,6 +8,8 @@ class AutoSkinner {
     private let delayedActionQueue: DispatchQueue
     private let skinningDelayOverride: (() -> TimeInterval)?
     
+    var inputAllowed: () -> Bool = { true }
+    var onListenerError: ((String) -> Void)?
     var enabled: Bool = false
     var hotkey: String = "["
     
@@ -64,7 +66,7 @@ class AutoSkinner {
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            print("❌ Failed to create event tap for skinner (need Accessibility permission)")
+            onListenerError?("Skinner listener failed. Check Accessibility permission.")
             return
         }
         
@@ -76,6 +78,10 @@ class AutoSkinner {
             CGEvent.tapEnable(tap: tap, enable: true)
             isListening = true
             print("🔪 Skinner listener started")
+        } else {
+            CFMachPortInvalidate(tap)
+            eventTap = nil
+            onListenerError?("Skinner listener run loop could not be created.")
         }
     }
     
@@ -85,6 +91,7 @@ class AutoSkinner {
 
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
         }
         
         if let source = runLoopSource {
@@ -108,6 +115,7 @@ class AutoSkinner {
     }
     
     func performSkinning() {
+        guard inputAllowed() else { return }
         // Wait for the existing randomized delay, then press the hotkey.
         let delay = skinningDelayOverride?() ??
             humanRandom(median: 0.35, spread: 0.35, min: 0.15, max: 0.8)
@@ -116,7 +124,7 @@ class AutoSkinner {
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.pendingSkinningWorkItems.removeValue(forKey: id)
-            guard self.skinningGeneration == generation, self.enabled else { return }
+            guard self.skinningGeneration == generation, self.enabled, self.inputAllowed() else { return }
             self.keyPress.pressKey(self.hotkey, priority: .regular, group: self.keyPressGroup)
             print("🔪 Skinned! (in \(String(format: "%.3f", delay))s)")
         }

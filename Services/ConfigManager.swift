@@ -87,7 +87,6 @@ final class ConfigManager: ObservableObject {
         do {
             let data = try Data(contentsOf: configURL)
             config = try JSONDecoder().decode(UserConfig.self, from: data)
-            config.normalizeHealingCooldown()
             print("Config loaded from \(configURL.path)")
         } catch {
             print("Failed to load config: \(error)")
@@ -97,7 +96,6 @@ final class ConfigManager: ObservableObject {
 
     /// Encodes a stable snapshot and writes only the latest request after 300 ms.
     func save() {
-        config.normalizeHealingCooldown()
         let data: Data
         do {
             data = try JSONEncoder().encode(config)
@@ -138,6 +136,15 @@ final class ConfigManager: ObservableObject {
                 print("Failed to remove config: \(error)")
             }
         }
+    }
+
+    /// Finish the latest configuration write before application termination.
+    func flush() {
+        cancelPendingSave()
+        do {
+            let data = try JSONEncoder().encode(config)
+            try fileQueue.sync { try writeData(data, configURL) }
+        } catch { print("Failed to flush config: \(error)") }
     }
 
     func cancelPendingSave() {

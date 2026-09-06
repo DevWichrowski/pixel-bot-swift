@@ -13,6 +13,18 @@ struct ConfigView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 5) {
+                if bot.tibiaApplications.count > 1 {
+                    Picker("Tibia application", selection: $bot.selectedTibiaPID) {
+                        Text("Select Tibia").tag(Int32(0))
+                        ForEach(bot.tibiaApplications, id: \.processIdentifier) { app in
+                            Text("\(app.localizedName ?? "Tibia") (\(app.processIdentifier))").tag(app.processIdentifier)
+                        }
+                    }
+                } else {
+                    Text(bot.tibiaApplications.isEmpty ? "Waiting for Tibia" : "Tibia detected automatically")
+                }
+                Toggle("Middle mouse to V while running", isOn: $bot.middleMouseEnabled)
+
                 CollapsibleSection(
                     title: "Regions",
                     icon: "◎",
@@ -32,7 +44,7 @@ struct ConfigView: View {
                         )
 
                         RegionDiagnosticCard(
-                            title: "Mana",
+                            title: "Mana + Magic Shield",
                             icon: Theme.Icons.mana,
                             tint: Theme.mana,
                             regionStatus: bot.manaRegionStatus,
@@ -42,6 +54,12 @@ struct ConfigView: View {
                             refreshAction: { bot.refreshDiagnostic(kind: .mana) }
                         )
 
+                        Text("Mana: \(bot.manaString)")
+                        Text("Shield: \(bot.shieldReadout.state.rawValue) \(bot.shieldReadout.current.map(String.init) ?? "?")/\(bot.shieldReadout.maximum.map(String.init) ?? "?")")
+                        Text("Shield confidence: \(Int(bot.shieldReadout.confidence * 100))% · age: \(bot.shieldReadout.freshness().map { "\(Int($0 * 1_000)) ms" } ?? "unknown")")
+                            .font(.caption)
+                        Text("Select both mana and the parenthesized shield capacity. Missing, clipped or unreadable shield text stays unknown; widen an older mana selection if needed.")
+                            .font(.caption)
                         RegionDiagnosticCard(
                             title: "Ammo",
                             icon: "🏹",
@@ -62,6 +80,22 @@ struct ConfigView: View {
                     isExpanded: $healingExpanded
                 ) {
                     VStack(spacing: 4) {
+                        Picker("Vocation", selection: $bot.healingVocation) {
+                            Text("All vocations").tag(HealingVocation?.none)
+                            ForEach(HealingVocation.allCases, id: \.self) { vocation in
+                                Text(vocation.displayName).tag(Optional(vocation))
+                            }
+                        }
+                        HealingSpellPicker(title: "Heal spell", selection: $bot.healAction, vocation: bot.healingVocation)
+                        HealingSpellPicker(title: "Critical spell", selection: $bot.criticalAction, vocation: bot.healingVocation)
+                            .disabled(bot.criticalIsPotion)
+                        HealingSpellReference()
+                        Text("Select spell identities before automatic spell healing. Hotkeys do not identify spells.").font(.caption)
+                        ThresholdRow(label: "Magic Shield", icon: "◈", color: Theme.mana,
+                                     isOn: $bot.magicShieldEnabled, threshold: $bot.magicShieldThreshold)
+                        HotkeyRow(label: "Magic Shield", hotkey: $bot.magicShieldHotkey)
+                        Text("Below threshold, 50 mana, two fresh inactive shield frames. No refresh while active.").font(.caption)
+
                         ThresholdRow(
                             label: "Heal",
                             icon: Theme.Icons.heal,
@@ -122,7 +156,7 @@ struct ConfigView: View {
                                 .font(Theme.utilityFont())
                                 .foregroundStyle(Theme.text)
                             Spacer()
-                            Text("\(bot.healingGroupCooldownText) s")
+                            Text("From selected spell")
                                 .font(Theme.dataFont())
                                 .foregroundStyle(Theme.textDim)
                         }
@@ -202,6 +236,7 @@ struct ConfigView: View {
                             color: Theme.accent,
                             isOn: $bot.utitoTempoEnabled
                         )
+                        Text("Official client: choose your stance in Tibia. Stored Utito hotkeys and recast settings are retained but do not toggle stances automatically.").font(.caption)
                         HotkeyRow(label: "⚡ Utito Tempo", hotkey: $bot.utitoTempoHotkey)
                         ToggleRow(
                             label: "Re-cast Utito",
@@ -516,5 +551,76 @@ private struct DiagnosticMetric: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue(value)
+    }
+}
+
+private struct HealingSpellPicker: View {
+    let title: String
+    @Binding var selection: HealingAction?
+    let vocation: HealingVocation?
+
+    private var choices: [HealingAction] { HealingAction.choices(for: vocation) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Picker(title, selection: $selection) {
+                Text("Select spell").tag(HealingAction?.none)
+                ForEach(choices, id: \.self) { action in
+                    Text(action.displayName).tag(Optional(action))
+                }
+                if let selection, !choices.contains(selection) {
+                    Text("\(selection.displayName) (unavailable)").tag(Optional(selection))
+                }
+            }
+            if let selection {
+                if !choices.contains(selection) {
+                    Text("This slot cannot cast with the selected vocation. Choose a compatible self-healing spell.")
+                        .foregroundStyle(Theme.warning)
+                        .font(.caption)
+                } else {
+                    Text("\(Int(selection.individualCooldown)) s individual · \(Int(selection.groupCooldown)) s Healing group")
+                        .font(.caption)
+                }
+            }
+        }
+    }
+}
+
+private struct HealingSpellReference: View {
+    var body: some View {
+        DisclosureGroup("Self-healing spell reference") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Base cooldowns in seconds: individual / Healing group. Verification date: 5 September 2026.")
+                Text("Official verification was reported in the supplied catalogue; this update cross-checked TibiaWiki BR. Official pages blocked automated access during this update.")
+                Text("Emergency self-healing")
+                    .fontWeight(.semibold)
+                ForEach(HealingAction.allCases.filter(\.isEmergencyHealing), id: \.self) { action in
+                    referenceRow(action)
+                }
+                Text("Self-regeneration (outside Heal / Critical choices)")
+                    .fontWeight(.semibold)
+                ForEach(HealingAction.allCases.filter { !$0.isEmergencyHealing }, id: \.self) { action in
+                    referenceRow(action)
+                }
+                Text("Vocation families include their promotions: \(HealingVocation.allCases.map(\.displayName).joined(separator: "; ")).")
+                if let url = URL(string: "https://www.tibia.com/news/?id=8833&subtopic=newsarchive") {
+                    Link("Intense Wound Cleansing change: 120 s", destination: url)
+                }
+                Text("Cooldowns start at successful key-down, which does not confirm a cast in the client. Wheel of Destiny reductions are not applied. Match each selected spell to its configured hotkey and compare timing with the client cooldown display.")
+            }
+            .font(.caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func referenceRow(_ action: HealingAction) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(action.displayName) · \(Int(action.individualCooldown)) / \(Int(action.groupCooldown)) s")
+            Text(action.vocations.map(\.displayName).joined(separator: ", "))
+            HStack {
+                if let url = action.officialURL { Link("Official Library", destination: url) }
+                if let url = action.secondaryURL { Link("TibiaWiki BR", destination: url) }
+            }
+        }
     }
 }

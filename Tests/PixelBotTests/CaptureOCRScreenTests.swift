@@ -168,10 +168,10 @@ final class CaptureOCRScreenTests: XCTestCase {
         }
     }
 
-    func testHPRequiresTwoMatchingRealtimeReads() {
-        it("should confirm HP after two matching realtime fast reads") {
+    func testHPNumericRecognitionRemainsImmediate() {
+        it("should publish changing HP immediately for independent action confirmation") {
             let hpRecognizer = CaptureOCRRecognizerStub(
-                fast: [captureOCRCandidate("40/100"), captureOCRCandidate("40/100")]
+                fast: [captureOCRCandidate("40/100"), captureOCRCandidate("39/100")]
             )
             let manaRecognizer = CaptureOCRRecognizerStub(
                 fast: [captureOCRCandidate("80/100"), captureOCRCandidate("80/100")]
@@ -191,7 +191,7 @@ final class CaptureOCRScreenTests: XCTestCase {
                     second?.hpConfirmedCurrent,
                     hpRecognizer.calls.count,
                 ],
-                [nil, 40, 2]
+                [40, 39, 2]
             )
         }
     }
@@ -233,8 +233,9 @@ final class CaptureOCRScreenTests: XCTestCase {
                 holdDurationProvider: { 0 },
                 gapDurationProvider: { 0 }
             )
-            let healer = AutoHealer(keyPress: service)
+            let healer = AutoHealer(keyPress: service, reactionDelayOverride: { 0 })
             healer.criticalHeal.enabled = false
+            healer.heal.action = .salvation
             let hp = CaptureRegion(x: 0, y: 0, width: 6, height: 6)!
             let mana = CaptureRegion(x: 6, y: 0, width: 6, height: 6)!
             reader.setRegions(hp: hp, mana: mana, generation: 1)

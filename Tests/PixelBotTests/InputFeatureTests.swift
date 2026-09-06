@@ -406,8 +406,8 @@ final class InputFeatureTests: XCTestCase {
         }
     }
 
-    func testFirstHealingDecisionHasNoReactionDelay() {
-        it("should send the first valid healing decision immediately") {
+    func testControlledHealingDecisionHasNoReactionDelay() {
+        it("should send a normal healing decision immediately with a zero delay override") {
             let keyDown = DispatchSemaphore(value: 0)
             let service = KeyPressService(
                 eventPoster: { keyCode, isKeyDown in
@@ -419,7 +419,9 @@ final class InputFeatureTests: XCTestCase {
                 holdDurationProvider: { 0 },
                 gapDurationProvider: { 0 }
             )
-            let healer = AutoHealer(keyPress: service)
+            let healer = AutoHealer(keyPress: service, reactionDelayOverride: { 0 })
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxHP(100)
             healer.criticalHeal.enabled = false
 
@@ -449,7 +451,9 @@ final class InputFeatureTests: XCTestCase {
                 holdDurationProvider: { 0 },
                 gapDurationProvider: { 0 }
             )
-            let healer = AutoHealer(keyPress: service)
+            let healer = AutoHealer(keyPress: service, reactionDelayOverride: { 0 })
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxHP(100)
 
             healer.checkAndHeal(currentHP: 60)
@@ -478,10 +482,12 @@ final class InputFeatureTests: XCTestCase {
                     }
                     return true
                 },
-                holdDurationProvider: { 0.25 },
+                holdDurationProvider: { 0.20 },
                 gapDurationProvider: { 0 }
             )
-            let healer = AutoHealer(keyPress: service)
+            let healer = AutoHealer(keyPress: service, reactionDelayOverride: { 0 })
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxHP(100)
 
             service.pressKey("F9")
@@ -495,7 +501,7 @@ final class InputFeatureTests: XCTestCase {
             let remaining = healer.healingCooldownRemaining
             service.cancelAll()
 
-            XCTAssertTrue(queueWait >= 0.20 && secondDecision == nil && remaining > 0)
+            XCTAssertTrue(queueWait >= 0.15 && secondDecision == nil && remaining > 0)
         }
     }
 
@@ -519,7 +525,9 @@ final class InputFeatureTests: XCTestCase {
                 holdDurationProvider: { 0.15 },
                 gapDurationProvider: { 0 }
             )
-            let healer = AutoHealer(keyPress: service)
+            let healer = AutoHealer(keyPress: service, reactionDelayOverride: { 0 })
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxHP(100)
 
             service.pressKey("F9")
@@ -553,7 +561,9 @@ final class InputFeatureTests: XCTestCase {
                 holdDurationProvider: { 0.15 },
                 gapDurationProvider: { 0 }
             )
-            let healer = AutoHealer(keyPress: service)
+            let healer = AutoHealer(keyPress: service, reactionDelayOverride: { 0 })
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxHP(100)
             healer.criticalHeal.enabled = false
 
@@ -592,7 +602,9 @@ final class InputFeatureTests: XCTestCase {
                 holdDurationProvider: { 0 },
                 gapDurationProvider: { 0 }
             )
-            let healer = AutoHealer(keyPress: service)
+            let healer = AutoHealer(keyPress: service, reactionDelayOverride: { 0 })
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxHP(100)
             healer.criticalHeal.enabled = false
 
@@ -624,7 +636,9 @@ final class InputFeatureTests: XCTestCase {
                 holdDurationProvider: { 0.15 },
                 gapDurationProvider: { 0 }
             )
-            let healer = AutoHealer(keyPress: service)
+            let healer = AutoHealer(keyPress: service, reactionDelayOverride: { 0 })
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxHP(100)
             healer.criticalHeal.enabled = false
 
@@ -691,6 +705,8 @@ final class InputFeatureTests: XCTestCase {
                 reactionDelayOverride: { 0 },
                 interActionDelayOverride: { 0.02 }
             )
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxHP(100)
             healer.setMaxMana(100)
             healer.spiritPotionHeal = true
@@ -706,26 +722,37 @@ final class InputFeatureTests: XCTestCase {
         it("should map HP actions to healing and mana restore to urgent") {
             let keyPress = RecordingKeyPressService()
 
-            let normal = AutoHealer(keyPress: keyPress)
+            let normal = AutoHealer(keyPress: keyPress, reactionDelayOverride: { 0 })
+            normal.heal.action = .salvation
+            normal.criticalHeal.action = .salvation
             normal.setMaxHP(100)
             normal.criticalHeal.enabled = false
             normal.checkAndHeal(currentHP: 60)
 
             let critical = AutoHealer(keyPress: keyPress)
+            critical.heal.action = .salvation
+            critical.criticalHeal.action = .salvation
             critical.setMaxHP(100)
             critical.checkAndHeal(currentHP: 40)
 
             let criticalPotion = AutoHealer(keyPress: keyPress)
+            criticalPotion.heal.action = .salvation
+            criticalPotion.criticalHeal.action = .salvation
             criticalPotion.setMaxHP(100)
             criticalPotion.checkCriticalPotionHeal(currentHP: 40)
 
             let spiritPotion = AutoHealer(keyPress: keyPress)
+            spiritPotion.heal.action = .salvation
+            spiritPotion.criticalHeal.action = .salvation
             spiritPotion.setMaxHP(100)
             spiritPotion.spiritPotionHeal = true
             spiritPotion.criticalHeal.enabled = false
+            spiritPotion.heal.enabled = false
             _ = spiritPotion.checkSpiritPotionHeal(currentHP: 30)
 
             let mana = AutoHealer(keyPress: keyPress)
+            mana.heal.action = .salvation
+            mana.criticalHeal.action = .salvation
             mana.setMaxMana(100)
             mana.checkAndRestoreMana(currentMana: 40)
 
@@ -741,6 +768,8 @@ final class InputFeatureTests: XCTestCase {
             let keyPress = RecordingKeyPressService()
             keyPress.acceptsRequests = false
             let healer = AutoHealer(keyPress: keyPress)
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxMana(100)
 
             let restored = healer.checkAndRestoreMana(currentMana: 40)
@@ -753,6 +782,8 @@ final class InputFeatureTests: XCTestCase {
         it("should replace a pending mana potion with an HP potion") {
             let keyPress = PendingKeyPressService()
             let healer = AutoHealer(keyPress: keyPress)
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxHP(100)
             healer.setMaxMana(100)
 
@@ -767,6 +798,8 @@ final class InputFeatureTests: XCTestCase {
         it("should preserve a pending HP potion when mana is low") {
             let keyPress = PendingKeyPressService()
             let healer = AutoHealer(keyPress: keyPress)
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxHP(100)
             healer.setMaxMana(100)
 
@@ -781,6 +814,8 @@ final class InputFeatureTests: XCTestCase {
         it("should allow a potion retry after cancellation before keyDown") {
             let keyPress = PendingKeyPressService()
             let healer = AutoHealer(keyPress: keyPress)
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxMana(100)
 
             let first = healer.checkAndRestoreMana(currentMana: 40)
@@ -817,6 +852,8 @@ final class InputFeatureTests: XCTestCase {
         it("should cancel spell and HP potion requests without cancelling mana") {
             let keyPress = PendingKeyPressService()
             let healer = AutoHealer(keyPress: keyPress)
+            healer.heal.action = .salvation
+            healer.criticalHeal.action = .salvation
             healer.setMaxHP(100)
             healer.setMaxMana(100)
             healer.spiritPotionHeal = true
@@ -903,6 +940,7 @@ final class InputFeatureTests: XCTestCase {
         it("should map middle mouse down to V") {
             let keyPress = RecordingKeyPressService()
             let mapper = MiddleMouseKeyMapper(keyPress: keyPress)
+            mapper.enabled = true
 
             mapper.handleMouseEvent(type: .otherMouseDown, buttonNumber: 2)
 
@@ -914,6 +952,7 @@ final class InputFeatureTests: XCTestCase {
         it("should suppress middle mouse down and up") {
             let keyPress = RecordingKeyPressService()
             let mapper = MiddleMouseKeyMapper(keyPress: keyPress)
+            mapper.enabled = true
 
             let down = mapper.handleMouseEvent(type: .otherMouseDown, buttonNumber: 2)
             let up = mapper.handleMouseEvent(type: .otherMouseUp, buttonNumber: 2)
@@ -926,6 +965,7 @@ final class InputFeatureTests: XCTestCase {
         it("should pass through other additional mouse buttons") {
             let keyPress = RecordingKeyPressService()
             let mapper = MiddleMouseKeyMapper(keyPress: keyPress)
+            mapper.enabled = true
 
             let down = mapper.handleMouseEvent(type: .otherMouseDown, buttonNumber: 3)
             let up = mapper.handleMouseEvent(type: .otherMouseUp, buttonNumber: 3)
@@ -938,6 +978,7 @@ final class InputFeatureTests: XCTestCase {
         it("should send V only once for a complete middle mouse click") {
             let keyPress = RecordingKeyPressService()
             let mapper = MiddleMouseKeyMapper(keyPress: keyPress)
+            mapper.enabled = true
 
             mapper.handleMouseEvent(type: .otherMouseDown, buttonNumber: 2)
             mapper.handleMouseEvent(type: .otherMouseUp, buttonNumber: 2)

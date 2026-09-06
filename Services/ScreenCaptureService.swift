@@ -3,6 +3,7 @@ import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Foundation
+import Darwin.Mach
 import ScreenCaptureKit
 
 enum ScreenCaptureServiceError: LocalizedError {
@@ -35,24 +36,61 @@ enum ScreenCaptureServiceError: LocalizedError {
     }
 }
 
+/// ScreenCaptureKit displayTime is mach absolute ticks (SCStream.h).
+/// Map elapsed ticks onto the same systemUptime clock used by action deadlines.
+enum CaptureFrameTiming {
+    private static let secondsPerTick: Double = {
+        var timebase = mach_timebase_info_data_t()
+        mach_timebase_info(&timebase)
+        return Double(timebase.numer) / Double(timebase.denom) / 1_000_000_000
+    }()
+
+    static func captureUptime(
+        displayTime: UInt64,
+        currentTicks: UInt64 = mach_absolute_time(),
+        currentUptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+        secondsPerTick: Double? = nil
+    ) -> TimeInterval? {
+        guard displayTime > 0 else { return nil }
+        let tickDuration = secondsPerTick ?? Self.secondsPerTick
+        // WindowServer can deliver a complete frame before its scheduled display time.
+        // Keep freshness conservative by clamping a small lead to callback time.
+        if displayTime > currentTicks {
+            let lead = Double(displayTime - currentTicks) * tickDuration
+            return lead <= 0.050 && currentUptime.isFinite && currentUptime >= 0 ? currentUptime : nil
+        }
+        let age = Double(currentTicks - displayTime) * tickDuration
+        let uptime = currentUptime - age
+        return uptime.isFinite && uptime >= 0 ? uptime : nil
+    }
+}
+
 /// Serially processes one value at a time while retaining only the newest pending value.
 final class LatestFrameProcessor<Element>: @unchecked Sendable {
     private let lock = NSLock()
     private let queue: DispatchQueue
     private let handler: (Element) -> Void
+    private let onDroppedFrame: () -> Void
     private var isProcessing = false
     private var pending: Element?
     private var isStopped = false
 
-    init(queue: DispatchQueue, handler: @escaping (Element) -> Void) {
+    init(
+        queue: DispatchQueue,
+        onDroppedFrame: @escaping () -> Void = {},
+        handler: @escaping (Element) -> Void
+    ) {
         self.queue = queue
         self.handler = handler
+        self.onDroppedFrame = onDroppedFrame
     }
 
     func submit(_ element: Element) {
+        var dropped = false
         let shouldStart: Bool = lock.withLock {
             guard !isStopped else { return false }
             if isProcessing {
+                dropped = pending != nil
                 pending = element
                 return false
             }
@@ -60,6 +98,7 @@ final class LatestFrameProcessor<Element>: @unchecked Sendable {
             return true
         }
 
+        if dropped { onDroppedFrame() }
         guard shouldStart else { return }
         queue.async { [weak self] in
             self?.process(element)
@@ -162,6 +201,8 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private var _runState: BotRunState = .stopped
     private var _currentGeneration: UInt64 = 0
     private var _currentFrame: CapturedFrame?
+    private var lastDisplayTime: UInt64 = 0
+    private var lastFrameDiagnosticUptime: TimeInterval = 0
     private var _regions = CaptureRegions()
     private var _sourceRect = CGRect.zero
     private var frameHandler: FrameHandler?
@@ -340,6 +381,7 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
         let generation: UInt64 = stateLock.withLock {
             _currentGeneration &+= 1
             _currentFrame = nil
+            lastDisplayTime = 0
             _regions = regions
             _sourceRect = configuration.sourceRect
             acceptsFrames = false
@@ -460,6 +502,16 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
         of outputType: SCStreamOutputType
     ) {
+        if outputType == .screen {
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - lastFrameDiagnosticUptime >= 5 {
+                lastFrameDiagnosticUptime = now
+                PixelBotDiagnosticLogger.shared.log("capture_frame", fields: [
+                    "status": .integer(frameStatus(in: sampleBuffer)?.rawValue ?? -1),
+                    "lastAcceptedDisplayTime": .string(String(stateLock.withLock { lastDisplayTime })),
+                ])
+            }
+        }
         guard outputType == .screen,
               frameStatus(in: sampleBuffer) == .complete,
               let pixelBuffer = sampleBuffer.imageBuffer else {
@@ -480,15 +532,25 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
         }
 
         guard let snapshot else { return }
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(
+            sampleBuffer, createIfNecessary: false
+        ) as? [[SCStreamFrameInfo: Any]],
+              let displayTime = attachments.first?[.displayTime] as? UInt64,
+              let captureUptime = CaptureFrameTiming.captureUptime(displayTime: displayTime) else {
+            DiagnosticMetrics.shared.record(.invalidFrameTiming)
+            return
+        }
         let frame = CapturedFrame(
             pixelBuffer: pixelBuffer,
             sourceRect: snapshot.sourceRect,
             generation: snapshot.generation,
-            timestamp: Date()
+            timestamp: Date().addingTimeInterval(captureUptime - ProcessInfo.processInfo.systemUptime),
+            captureUptime: captureUptime
         )
 
         let accepted: Bool = stateLock.withLock {
-            guard acceptsFrames, _currentGeneration == frame.generation else { return false }
+            guard acceptsFrames, _currentGeneration == frame.generation, displayTime > lastDisplayTime else { return false }
+            lastDisplayTime = displayTime
             _currentFrame = frame
             return true
         }
@@ -599,7 +661,10 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
         stateHandler: StateHandler?,
         stream: SCStream
     ) -> UInt64 {
-        let processor = LatestFrameProcessor<CapturedFrame>(queue: processingQueue) { [weak self] frame in
+        let processor = LatestFrameProcessor<CapturedFrame>(
+            queue: processingQueue,
+            onDroppedFrame: { DiagnosticMetrics.shared.record(.droppedFrames) }
+        ) { [weak self] frame in
             guard let self else {
                 return
             }
@@ -613,6 +678,7 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
         let generation: UInt64 = stateLock.withLock {
             _currentGeneration &+= 1
             _currentFrame = nil
+            lastDisplayTime = 0
             _regions = regions
             _sourceRect = sourceRect
             self.frameHandler = frameHandler

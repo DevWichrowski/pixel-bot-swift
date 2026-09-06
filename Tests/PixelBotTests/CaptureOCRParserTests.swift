@@ -81,4 +81,61 @@ final class CaptureOCRParserTests: XCTestCase {
             XCTAssertEqual(value, ParsedNumericValue(current: 111, maximum: nil))
         }
     }
+    func testInactiveShieldField() {
+        it("should separate mana from an inactive shield") {
+            XCTAssertEqual(ManaOCRParser().parse("1915/2790 (0/0)"),
+                           ParsedManaReadout(mana: ParsedNumericValue(current: 1915, maximum: 2790),
+                                             shield: ParsedNumericValue(current: 0, maximum: 0)))
+        }
+    }
+
+    func testActiveShieldField() {
+        it("should separate mana from active shield capacity") {
+            XCTAssertEqual(ManaOCRParser().parse("1913/2790 (1633/1633)"),
+                           ParsedManaReadout(mana: ParsedNumericValue(current: 1913, maximum: 2790),
+                                             shield: ParsedNumericValue(current: 1633, maximum: 1633)))
+        }
+    }
+
+    func testUnreadableShieldPreservesMana() {
+        it("should preserve mana when the shield is unreadable") {
+            XCTAssertEqual(ManaOCRParser().parse("1913/2790 (???"),
+                           ParsedManaReadout(mana: ParsedNumericValue(current: 1913, maximum: 2790), shield: nil))
+        }
+    }
+
+    func testShieldOnlyCannotBecomeMana() {
+        it("should reject shield-only text as mana") {
+            XCTAssertNil(ManaOCRParser().parse("(1633/1633)").mana)
+        }
+    }
+
+    func testIndependentSlashRecovery() {
+        it("should recover each pair separator independently") {
+            XCTAssertEqual(ManaOCRParser().parse("191312790 (163311633)"),
+                           ParsedManaReadout(mana: ParsedNumericValue(current: 1913, maximum: 2790),
+                                             shield: ParsedNumericValue(current: 1633, maximum: 1633)))
+        }
+    }
+
+    func testStaleShieldIsUnknown() {
+        it("should treat expired shield evidence as unknown") {
+            let now = Date()
+            let shield = ShieldReadout(current: 0, maximum: 0, confidence: 1,
+                                       timestamp: now.addingTimeInterval(-0.251), state: .inactive)
+            XCTAssertEqual(shield.state(at: now), .unknown)
+        }
+    }
+    func testManaRejectsAmbiguousSlashRecovery() {
+        it("should reject every ambiguous mana split even when digit lengths favor one") {
+            XCTAssertNil(ManaOCRParser().parse("11111 (0/0)").mana)
+        }
+    }
+
+    func testShieldRejectsAmbiguousSlashRecovery() {
+        it("should preserve mana but reject an ambiguous shield split") {
+            XCTAssertEqual(ManaOCRParser().parse("1913/2790 (11111)"),
+                           ParsedManaReadout(mana: ParsedNumericValue(current: 1913, maximum: 2790), shield: nil))
+        }
+    }
 }

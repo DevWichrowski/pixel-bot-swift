@@ -34,6 +34,15 @@ struct StatusView: View {
                     )
                 }
 
+                StatusPanel {
+                    HStack {
+                        Text("Magic Shield")
+                        Spacer()
+                        Text("\(bot.shieldReadout.state.rawValue) \(bot.shieldReadout.current.map(String.init) ?? "?")/\(bot.shieldReadout.maximum.map(String.init) ?? "?")")
+                    }
+                    .font(Theme.utilityFont())
+                }
+
                 VStack(spacing: 3) {
                     StatusSectionHeader(title: "ACTIVE SYSTEMS", icon: .iconCombo)
 
@@ -55,6 +64,12 @@ struct StatusView: View {
                             icon: .iconMana,
                             tint: Theme.mana,
                             isEnabled: $bot.manaEnabled
+                        )
+                        FeatureStateTile(
+                            title: "Magic Shield",
+                            icon: .iconMana,
+                            tint: Theme.mana,
+                            isEnabled: $bot.magicShieldEnabled
                         )
                         FeatureStateTile(
                             title: "Spirit",

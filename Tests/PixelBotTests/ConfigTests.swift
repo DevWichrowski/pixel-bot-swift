@@ -13,7 +13,7 @@ final class ConfigTests: XCTestCase {
     }
 
     func testHealingCooldownNormalization() throws {
-        try it("should normalize stored and preset healing cooldowns to one second") {
+        try it("should preserve legacy stored and preset healing cooldowns") {
             let data = Data(
                 #"{"healer":{"spellCooldown":0.5},"presets":[{"name":"Old","healer":{"spellCooldown":0.9}}]}"#.utf8
             )
@@ -22,7 +22,7 @@ final class ConfigTests: XCTestCase {
 
             XCTAssertEqual(
                 [config.healer.spellCooldown, config.presets.first?.healer.spellCooldown],
-                [1.0, 1.0]
+                [0.5, 0.9]
             )
         }
     }

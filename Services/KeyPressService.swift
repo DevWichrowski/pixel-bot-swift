@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import ApplicationServices
 import CoreGraphics
 import Carbon.HIToolbox
 
@@ -18,6 +20,7 @@ enum KeyPressPriority: String, Sendable {
     case regular
     case urgent
     case healing
+    case emergency
 }
 
 struct KeyPressLifecycleEvent: Sendable {
@@ -42,10 +45,23 @@ protocol KeyPressServicing: AnyObject {
         lifecycle: KeyPressLifecycleHandler?
     ) -> Bool
 
+    @discardableResult
+    func pressKey(_ key: String, priority: KeyPressPriority, group: KeyPressRequestGroup?,
+                  validUntil: TimeInterval?, isValid: @escaping () -> Bool,
+                  lifecycle: KeyPressLifecycleHandler?) -> Bool
+
     func cancelPendingRequests(in group: KeyPressRequestGroup)
 }
 
 extension KeyPressServicing {
+    @discardableResult
+    func pressKey(_ key: String, priority: KeyPressPriority, group: KeyPressRequestGroup?,
+                  validUntil: TimeInterval?, isValid: @escaping () -> Bool,
+                  lifecycle: KeyPressLifecycleHandler?) -> Bool {
+        guard isValid() else { return false }
+        return pressKey(key, priority: priority, group: group, validUntil: validUntil, lifecycle: lifecycle)
+    }
+
     @discardableResult
     func pressKey(_ key: String) -> Bool {
         pressKey(key, priority: .regular, group: nil, validUntil: nil, lifecycle: nil)
@@ -126,6 +142,7 @@ class KeyPressService: KeyPressServicing {
         let queuedAt: TimeInterval
         let validUntil: TimeInterval?
         let lifecycle: KeyPressLifecycleHandler?
+        let isValid: () -> Bool
     }
 
     private struct ActiveRequest {
@@ -151,6 +168,9 @@ class KeyPressService: KeyPressServicing {
     private let keyUpRetryInterval: TimeInterval
     private let diagnosticLogger: DiagnosticLogging?
 
+    private var emergencyRequests: [KeyRequest] = []
+    private var inputAllowed: () -> Bool
+    private let requiresAccessibility: Bool
     private var healingRequests: [KeyRequest] = []
     private var urgentRequests: [KeyRequest] = []
     private var regularRequests: [KeyRequest] = []
@@ -205,6 +225,10 @@ class KeyPressService: KeyPressServicing {
         self.regularGapDurationProvider = gapDurationProvider ?? regularGapDurationProvider
         self.keyUpRetryInterval = max(0.001, keyUpRetryInterval)
         self.diagnosticLogger = diagnosticLogger
+        self.requiresAccessibility = eventPoster == nil
+        self.inputAllowed = eventPoster == nil ? {
+            AXIsProcessTrusted() && NSWorkspace.shared.frontmostApplication?.localizedName == "Tibia"
+        } : { true }
         self.eventPoster = eventPoster ?? { keyCode, isKeyDown in
             guard let event = CGEvent(
                 keyboardEventSource: source,
@@ -225,7 +249,7 @@ class KeyPressService: KeyPressServicing {
 
     static func defaultHoldDuration(for priority: KeyPressPriority) -> TimeInterval {
         switch priority {
-        case .healing:
+        case .emergency, .healing:
             return humanRandom(median: 0.050, spread: 0.15, min: 0.040, max: 0.060)
         case .urgent:
             return humanRandom(median: 0.055, spread: 0.20, min: 0.040, max: 0.075)
@@ -236,7 +260,7 @@ class KeyPressService: KeyPressServicing {
 
     static func defaultGapDuration(for priority: KeyPressPriority) -> TimeInterval {
         switch priority {
-        case .healing:
+        case .emergency, .healing:
             return humanRandom(median: 0.015, spread: 0.20, min: 0.008, max: 0.025)
         case .urgent:
             return humanRandom(median: 0.025, spread: 0.25, min: 0.015, max: 0.045)
@@ -303,6 +327,13 @@ class KeyPressService: KeyPressServicing {
         validUntil: TimeInterval?,
         lifecycle: KeyPressLifecycleHandler?
     ) -> Bool {
+        pressKey(key, priority: priority, group: group, validUntil: validUntil, isValid: { true }, lifecycle: lifecycle)
+    }
+
+    @discardableResult
+    func pressKey(_ key: String, priority: KeyPressPriority, group: KeyPressRequestGroup?,
+                  validUntil: TimeInterval?, isValid: @escaping () -> Bool,
+                  lifecycle: KeyPressLifecycleHandler?) -> Bool {
         let normalizedKey = key.lowercased()
         let requestID = UUID()
         guard let keyCode = keyCodeMap[normalizedKey] else {
@@ -321,7 +352,7 @@ class KeyPressService: KeyPressServicing {
 
         return withState {
             let queuedAt = ProcessInfo.processInfo.systemUptime
-            guard acceptsRequests else {
+            guard acceptsRequests, inputAllowed(), !requiresAccessibility || AXIsProcessTrusted() else {
                 emit(
                     requestID: requestID,
                     key: key,
@@ -342,9 +373,12 @@ class KeyPressService: KeyPressServicing {
                 group: group,
                 queuedAt: queuedAt,
                 validUntil: validUntil,
-                lifecycle: lifecycle
+                lifecycle: lifecycle,
+                isValid: isValid
             )
             switch priority {
+            case .emergency:
+                emergencyRequests.append(request)
             case .healing:
                 healingRequests.append(request)
             case .urgent:
@@ -362,6 +396,7 @@ class KeyPressService: KeyPressServicing {
     /// The currently active key is intentionally allowed to finish.
     func cancelPendingRequests(in group: KeyPressRequestGroup) {
         withState {
+            cancelRequests(in: &emergencyRequests) { $0.group == group }
             cancelRequests(in: &healingRequests) { $0.group == group }
             cancelRequests(in: &urgentRequests) { $0.group == group }
             cancelRequests(in: &regularRequests) { $0.group == group }
@@ -373,6 +408,7 @@ class KeyPressService: KeyPressServicing {
     func cancelAll() {
         withState {
             acceptsRequests = false
+            cancelRequests(in: &emergencyRequests) { _ in true }
             cancelRequests(in: &healingRequests) { _ in true }
             cancelRequests(in: &urgentRequests) { _ in true }
             cancelRequests(in: &regularRequests) { _ in true }
@@ -388,6 +424,10 @@ class KeyPressService: KeyPressServicing {
                 attemptKeyUp(for: activeRequest, shouldLogHold: false)
             }
         }
+    }
+
+    func setInputAllowed(_ provider: @escaping () -> Bool) {
+        withState { inputAllowed = provider }
     }
 
     /// Allows new input after `cancelAll()`.
@@ -430,7 +470,9 @@ class KeyPressService: KeyPressServicing {
         guard acceptsRequests, activeRequest == nil else { return }
 
         let request: KeyRequest
-        if !healingRequests.isEmpty {
+        if !emergencyRequests.isEmpty {
+            request = emergencyRequests.removeFirst()
+        } else if !healingRequests.isEmpty {
             request = healingRequests.removeFirst()
         } else if !urgentRequests.isEmpty {
             request = urgentRequests.removeFirst()
@@ -450,7 +492,19 @@ class KeyPressService: KeyPressServicing {
         let holdDuration = max(0, holdDurationProvider(for: request.priority)())
         let gapDuration = max(0, gapDurationProvider(for: request.priority)())
 
-        // This is intentionally the last check before posting keyDown. Equality is expired.
+        guard request.isValid() else {
+            emit(request, phase: .cancelled)
+            scheduleNextRequestIfNeeded()
+            return
+        }
+
+        guard inputAllowed(), !requiresAccessibility || AXIsProcessTrusted() else {
+            emit(request, phase: .cancelled)
+            cancelAll()
+            return
+        }
+
+        // Validators may take time. Equality is expired, so recheck immediately before keyDown.
         if let validUntil = request.validUntil,
            ProcessInfo.processInfo.systemUptime >= validUntil {
             emit(request, phase: .cancelled)
@@ -514,6 +568,7 @@ class KeyPressService: KeyPressServicing {
     }
 
     private var nextPendingPriority: KeyPressPriority? {
+        if !emergencyRequests.isEmpty { return .emergency }
         if !healingRequests.isEmpty { return .healing }
         if !urgentRequests.isEmpty { return .urgent }
         if !regularRequests.isEmpty { return .regular }
@@ -522,7 +577,7 @@ class KeyPressService: KeyPressServicing {
 
     private func holdDurationProvider(for priority: KeyPressPriority) -> DelayProvider {
         switch priority {
-        case .healing: return healingHoldDurationProvider
+        case .emergency, .healing: return healingHoldDurationProvider
         case .urgent: return urgentHoldDurationProvider
         case .regular: return regularHoldDurationProvider
         }
@@ -530,7 +585,7 @@ class KeyPressService: KeyPressServicing {
 
     private func gapDurationProvider(for priority: KeyPressPriority) -> DelayProvider {
         switch priority {
-        case .healing: return healingGapDurationProvider
+        case .emergency, .healing: return healingGapDurationProvider
         case .urgent: return urgentGapDurationProvider
         case .regular: return regularGapDurationProvider
         }
@@ -643,8 +698,10 @@ class KeyPressService: KeyPressServicing {
         if let validityRemaining {
             let validityRemainingMs = validityRemaining * 1_000
             fields["validityRemainingMs"] = .double(validityRemainingMs)
-            if priority == .healing {
-                fields["frameToKeyDownMs"] = .double(max(0, 250 - validityRemainingMs))
+            if priority == .healing || priority == .emergency {
+                let frameAge = max(0, 0.250 - validityRemaining)
+                fields["frameToKeyDownMs"] = .double(frameAge * 1_000)
+                DiagnosticMetrics.shared.recordCaptureToKeyDown(seconds: frameAge)
             }
         }
         diagnosticLogger?.log("input_\(phase.rawValue)", fields: fields)
@@ -653,6 +710,6 @@ class KeyPressService: KeyPressServicing {
 
 private extension KeyPressPriority {
     func canBypassGate(after precedingPriority: KeyPressPriority) -> Bool {
-        self == .healing || (self == .urgent && precedingPriority == .regular)
+        self == .emergency || self == .healing || (self == .urgent && precedingPriority == .regular)
     }
 }

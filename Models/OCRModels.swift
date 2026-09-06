@@ -131,6 +131,7 @@ enum NumericReadoutState: String, Equatable, Sendable {
 }
 
 struct NumericReadout: Equatable, Sendable {
+    var captureUptime: TimeInterval? = nil
     var current: Int?
     var maximum: Int?
     var confidence: Float
@@ -158,13 +159,41 @@ struct NumericReadout: Equatable, Sendable {
     }
 
     func freshness(at date: Date = Date()) -> TimeInterval? {
-        timestamp.map { max(0, date.timeIntervalSince($0)) }
+        captureUptime.map { max(0, ProcessInfo.processInfo.systemUptime - $0) }
+            ?? timestamp.map { max(0, date.timeIntervalSince($0)) }
     }
 
     func state(at date: Date = Date(), staleAfter: TimeInterval = 0.250) -> NumericReadoutState {
         guard state != .unconfigured else { return .unconfigured }
+        guard state != .invalid else { return .invalid }
         guard current != nil, let timestamp else { return .invalid }
-        return date.timeIntervalSince(timestamp) >= staleAfter ? .stale : .valid
+        let age = captureUptime.map { ProcessInfo.processInfo.systemUptime - $0 } ?? date.timeIntervalSince(timestamp)
+        return age >= staleAfter ? .stale : .valid
+    }
+}
+
+enum ShieldState: String, Equatable, Sendable {
+    case active
+    case inactive
+    case unknown
+}
+
+struct ShieldReadout: Equatable, Sendable {
+    var captureUptime: TimeInterval? = nil
+    var current: Int? = nil
+    var maximum: Int? = nil
+    var confidence: Float = 0
+    var timestamp: Date? = nil
+    var state: ShieldState = .unknown
+
+    func freshness(at date: Date = Date()) -> TimeInterval? {
+        captureUptime.map { max(0, ProcessInfo.processInfo.systemUptime - $0) }
+            ?? timestamp.map { max(0, date.timeIntervalSince($0)) }
+    }
+
+    func state(at date: Date = Date(), staleAfter: TimeInterval = 0.250) -> ShieldState {
+        guard let age = freshness(at: date), age < staleAfter else { return .unknown }
+        return state
     }
 }
 
@@ -243,6 +272,7 @@ struct CapturedFrame: @unchecked Sendable {
     let sourceRect: CGRect
     let generation: UInt64
     let timestamp: Date
+    var captureUptime: TimeInterval? = nil
 
     var pixelSize: CGSize {
         CGSize(

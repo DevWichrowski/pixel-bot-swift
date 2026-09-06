@@ -16,6 +16,7 @@ class AutoHealer {
     private let hpPotionKeyPressGroup = KeyPressRequestGroup()
     private let manaPotionKeyPressGroup = KeyPressRequestGroup()
     private let uptimeProvider: () -> TimeInterval
+    private let reactionDelayProvider: () -> TimeInterval
     private let diagnosticLogger: DiagnosticLogging?
     private let decisionLogLock = NSLock()
     private var lastLoggedDecisionSignature: String?
@@ -25,12 +26,22 @@ class AutoHealer {
     var maxMana: Int?
 
     /// Heal configurations
-    var heal = HealConfig(enabled: true, threshold: 75, hotkey: "F1")
-    var criticalHeal = HealConfig(enabled: true, threshold: 50, hotkey: "F2")
+    var heal = HealConfig(enabled: true, threshold: 75, hotkey: "F1") {
+        didSet { cancelPendingHealing() }
+    }
+    var criticalHeal = HealConfig(enabled: true, threshold: 50, hotkey: "F2") {
+        didSet { cancelPendingHPDependentActions() }
+    }
     var manaRestore = HealConfig(enabled: true, threshold: 60, hotkey: "F4")
 
     /// Critical heal is a potion mode - shares cooldown with mana, has priority
-    var criticalIsPotion: Bool = false
+    var criticalIsPotion: Bool = false {
+        didSet { if criticalIsPotion != oldValue { cancelPendingHPDependentActions() } }
+    }
+
+    var vocation: HealingVocation? {
+        didSet { if vocation != oldValue { cancelPendingHealing() } }
+    }
 
     var spiritPotionHeal: Bool = false {
         didSet {
@@ -53,10 +64,22 @@ class AutoHealer {
         var didSendKeyDown: Bool
     }
 
+    private struct NormalHealingEpisode {
+        let episodeID: UUID
+        let startedAt: TimeInterval
+        let reactionDelay: TimeInterval
+        let readyAt: TimeInterval
+        var bypassed: Bool
+    }
+
     private let healingStateLock = NSLock()
     private var healingRequest: HealingRequestState?
     private var healingEnqueueInProgress = false
+    private var healingConfigurationRevision: UInt64 = 0
     private var lastHealingKeyDownUptime: TimeInterval?
+    private var lastHealingGroupCooldown: TimeInterval = 1
+    private var actionKeyDownTimes: [HealingAction: TimeInterval] = [:]
+    private var normalHealingEpisode: NormalHealingEpisode?
 
     private enum PotionKind {
         case hp
@@ -87,7 +110,9 @@ class AutoHealer {
     ) {
         self.keyPress = keyPress
         _ = delayedActionQueue
-        _ = reactionDelayOverride
+        self.reactionDelayProvider = reactionDelayOverride ?? {
+            humanRandom(median: 0.090, spread: 0.3, min: 0.050, max: 0.150)
+        }
         _ = interActionDelayOverride
         self.uptimeProvider = uptimeProvider
         self.diagnosticLogger = diagnosticLogger
@@ -170,24 +195,21 @@ class AutoHealer {
     /// Both normal and critical heal use spell cooldown
     /// Returns: "critical", "normal", or nil
     @discardableResult
-    func checkAndHeal(currentHP: Int, validFor: TimeInterval? = nil) -> String? {
+    func checkAndHeal(currentHP: Int, validFor: TimeInterval? = nil, allowNormal: Bool = true) -> String? {
         autoDetectMaxHP(currentHP)
 
-        guard maxHP != nil else { return nil }
+        cancelInvalidHPRequests(currentHP: currentHP)
+        guard maxHP != nil, currentHP > 0 else { return nil }
 
         let hpPercent = getHPPercent(currentHP)
         // Critical heal has priority
         if criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold) {
-            return castSpell(
-                criticalHeal,
-                priority: .critical,
-                validFor: validFor
-            ) ? "critical" : nil
+            if castSpell(criticalHeal, priority: .critical, validFor: validFor) { return "critical" }
         }
 
         // Normal heal
-        if heal.enabled && hpPercent < Double(heal.threshold) {
-            return castSpell(heal, priority: .normal, validFor: validFor) ? "normal" : nil
+        if allowNormal && heal.enabled && hpPercent < Double(heal.threshold) {
+            return castNormalSpell(hpPercent: hpPercent, validFor: validFor) ? "normal" : nil
         }
 
         resetHealingDecisionLog()
@@ -201,16 +223,25 @@ class AutoHealer {
     func checkNormalHealOnly(currentHP: Int, validFor: TimeInterval? = nil) -> Bool {
         autoDetectMaxHP(currentHP)
 
-        guard maxHP != nil else { return false }
+        cancelInvalidHPRequests(currentHP: currentHP)
+        guard maxHP != nil, currentHP > 0 else { return false }
 
         let hpPercent = getHPPercent(currentHP)
         // Only normal heal - critical is handled separately (potion)
         if heal.enabled && hpPercent < Double(heal.threshold) {
-            return castSpell(heal, priority: .normal, validFor: validFor)
+            return castNormalSpell(hpPercent: hpPercent, validFor: validFor)
         }
 
         resetHealingDecisionLog()
         return false
+    }
+
+    /// Applies one reaction delay at the start of a continuous normal-healing episode.
+    /// Once ready, the episode remains ready until HP recovers or runtime state is reset.
+    @discardableResult
+    private func castNormalSpell(hpPercent: Double, validFor: TimeInterval?) -> Bool {
+        guard normalHealingIsReady(hpPercent: hpPercent) else { return false }
+        return castSpell(heal, priority: .normal, validFor: validFor)
     }
 
     /// Queues one healing spell. The cooldown starts only when keyDown is sent.
@@ -220,6 +251,11 @@ class AutoHealer {
         priority: HealingPriority,
         validFor: TimeInterval?
     ) -> Bool {
+        guard let action = config.action, action.isEmergencyHealing,
+              action.supports(vocation: vocation) else { return false }
+        let revision = healingStateLock.withLock { healingConfigurationRevision }
+        let actionReady = healingStateLock.withLock { healingActionReadyLocked(action) }
+        guard actionReady else { return false }
         let existing = healingStateLock.withLock { healingRequest }
         if let existing {
             guard !existing.didSendKeyDown,
@@ -234,7 +270,8 @@ class AutoHealer {
         let canEnqueue = healingStateLock.withLock { () -> Bool in
             guard healingRequest == nil,
                   !healingEnqueueInProgress,
-                  healingCooldownRemainingLocked() <= 0 else {
+                  healingConfigurationRevision == revision,
+                  healingActionReadyLocked(action) else {
                 return false
             }
             healingEnqueueInProgress = true
@@ -245,13 +282,27 @@ class AutoHealer {
             return false
         }
 
+        let normalEpisode = priority == .normal
+            ? healingStateLock.withLock { normalHealingEpisode }
+            : nil
         let accepted = keyPress.pressKey(
             config.hotkey,
             priority: .healing,
             group: healingSpellKeyPressGroup,
-            validUntil: validFor.map { uptimeProvider() + max(0, $0) },
+            validUntil: uptimeProvider() + max(0, min(0.25, validFor ?? 0.25)),
+            isValid: { [weak self] in
+                guard let self else { return false }
+                return self.healingStateLock.withLock {
+                    self.healingConfigurationRevision == revision && self.healingActionReadyLocked(action)
+                }
+            },
             lifecycle: { [weak self] event in
-                self?.handleHealingLifecycle(event, priority: priority)
+                self?.handleHealingLifecycle(
+                    event,
+                    priority: priority,
+                    action: action,
+                    normalEpisode: normalEpisode
+                )
             }
         )
         if !accepted {
@@ -323,11 +374,15 @@ class AutoHealer {
 
     /// Check if mana restore is needed (uses potion cooldown)
     @discardableResult
-    func checkAndRestoreMana(currentMana: Int) -> Bool {
+    func checkAndRestoreMana(currentMana: Int, validFor: TimeInterval? = nil) -> Bool {
         autoDetectMaxMana(currentMana)
 
         guard maxMana != nil else { return false }
 
+        guard manaRestore.enabled, getManaPercent(currentMana) < Double(manaRestore.threshold) else {
+            cancelPendingManaActions()
+            return false
+        }
         guard !isPotionOnCooldown else { return false }
 
         let manaPercent = getManaPercent(currentMana)
@@ -336,7 +391,8 @@ class AutoHealer {
             guard usePotion(
                 manaRestore.hotkey,
                 kind: .mana,
-                priority: .urgent
+                priority: .urgent,
+                validUntil: uptimeProvider() + max(0, min(0.25, validFor ?? 0.25))
             ) else {
                 return false
             }
@@ -368,7 +424,8 @@ class AutoHealer {
         validFor: TimeInterval? = nil
     ) -> Bool {
         autoDetectMaxHP(currentHP)
-        guard maxHP != nil,
+        cancelInvalidHPRequests(currentHP: currentHP)
+        guard maxHP != nil, currentHP > 0,
               criticalHeal.enabled,
               getHPPercent(currentHP) < Double(criticalHeal.threshold) else {
             return false
@@ -377,7 +434,7 @@ class AutoHealer {
             criticalHeal.hotkey,
             kind: .hp,
             priority: .healing,
-            validUntil: validFor.map { uptimeProvider() + max(0, $0) }
+            validUntil: uptimeProvider() + max(0, min(0.25, validFor ?? 0.25))
         )
     }
 
@@ -390,23 +447,27 @@ class AutoHealer {
 
     func checkSpiritPotionHeal(
         currentHP: Int,
-        validFor: TimeInterval? = nil
+        validFor: TimeInterval? = nil,
+        allowCritical: Bool = true,
+        allowNormal: Bool = true,
+        allowPotion: Bool = true
     ) -> (spellCast: Bool, potionUsed: Bool) {
         guard spiritPotionHeal else { return (false, false) }
 
         autoDetectMaxHP(currentHP)
 
-        guard maxHP != nil else { return (false, false) }
+        cancelInvalidHPRequests(currentHP: currentHP)
+        guard maxHP != nil, currentHP > 0 else { return (false, false) }
 
         let hpPercent = getHPPercent(currentHP)
-        let needsCriticalHeal = criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold)
-        let needsSpiritPotion = hpPercent < Double(spiritPotionThreshold)
+        let needsCriticalHeal = allowCritical && criticalHeal.enabled && hpPercent < Double(criticalHeal.threshold)
+        let needsSpiritPotion = allowPotion && hpPercent < Double(spiritPotionThreshold)
 
-        guard needsCriticalHeal || needsSpiritPotion else { return (false, false) }
+        guard needsCriticalHeal || needsSpiritPotion || (allowNormal && heal.enabled && hpPercent < Double(heal.threshold)) else { return (false, false) }
 
         var spellCast = false
         var potionUsed = false
-        let validUntil = validFor.map { uptimeProvider() + max(0, $0) }
+        let validUntil = uptimeProvider() + max(0, min(0.25, validFor ?? 0.25))
 
         // Critical heal spell (independent threshold)
         if needsCriticalHeal {
@@ -415,6 +476,10 @@ class AutoHealer {
                 priority: .critical,
                 validFor: validFor
             )
+        }
+
+        if !spellCast, allowNormal, heal.enabled, hpPercent < Double(heal.threshold) {
+            spellCast = castNormalSpell(hpPercent: hpPercent, validFor: validFor)
         }
 
         // Spirit potion (independent threshold)
@@ -433,18 +498,52 @@ class AutoHealer {
         return (spellCast, potionUsed)
     }
 
+    func cancelPendingManaActions() {
+        keyPress.cancelPendingRequests(in: manaPotionKeyPressGroup)
+    }
+
+    /// Revoke queued decisions when the latest observation no longer supports them.
+    func cancelInvalidHPRequests(currentHP: Int) {
+        let percent = getHPPercent(currentHP)
+        if currentHP <= 0 || percent >= Double(heal.threshold) {
+            resetNormalHealingEpisode()
+        }
+        let pending = healingStateLock.withLock { healingRequest }
+        if let pending, !pending.didSendKeyDown {
+            let config = pending.priority == .critical ? criticalHeal : heal
+            if currentHP <= 0 || !config.enabled || percent >= Double(config.threshold) {
+                cancelPendingHealing()
+            }
+        }
+        let needsHPPotion = currentHP > 0 && (
+            (criticalIsPotion && criticalHeal.enabled && percent < Double(criticalHeal.threshold)) ||
+            (spiritPotionHeal && percent < Double(spiritPotionThreshold))
+        )
+        if !needsHPPotion { keyPress.cancelPendingRequests(in: hpPotionKeyPressGroup) }
+    }
+
     func cancelPendingActions() {
-        keyPress.cancelPendingRequests(in: healingSpellKeyPressGroup)
+        cancelPendingHealing()
         keyPress.cancelPendingRequests(in: hpPotionKeyPressGroup)
         keyPress.cancelPendingRequests(in: manaPotionKeyPressGroup)
     }
 
     func cancelPendingHealing() {
+        healingStateLock.withLock {
+            healingConfigurationRevision &+= 1
+            normalHealingEpisode = nil
+        }
         keyPress.cancelPendingRequests(in: healingSpellKeyPressGroup)
     }
 
+    func resetNormalHealingEpisode() {
+        healingStateLock.withLock {
+            normalHealingEpisode = nil
+        }
+    }
+
     func cancelPendingHPDependentActions() {
-        keyPress.cancelPendingRequests(in: healingSpellKeyPressGroup)
+        cancelPendingHealing()
         keyPress.cancelPendingRequests(in: hpPotionKeyPressGroup)
     }
 
@@ -474,7 +573,9 @@ class AutoHealer {
 
     private func handleHealingLifecycle(
         _ event: KeyPressLifecycleEvent,
-        priority: HealingPriority
+        priority: HealingPriority,
+        action: HealingAction,
+        normalEpisode: NormalHealingEpisode?
     ) {
         healingStateLock.withLock {
             switch event.phase {
@@ -489,19 +590,84 @@ class AutoHealer {
                 guard healingRequest?.requestID == event.requestID else { return }
                 healingRequest?.didSendKeyDown = true
                 lastHealingKeyDownUptime = event.timestamp
+                lastHealingGroupCooldown = action.groupCooldown
+                actionKeyDownTimes[action] = event.timestamp
             case .keyUp, .cancelled, .failed:
                 guard healingRequest?.requestID == event.requestID else { return }
                 healingRequest = nil
                 healingEnqueueInProgress = false
             }
         }
+        logHealingLifecycle(event, priority: priority, normalEpisode: normalEpisode)
+    }
+
+    private func normalHealingIsReady(hpPercent: Double) -> Bool {
+        let now = uptimeProvider()
+        let emergencyThreshold = Double(min(heal.threshold, criticalHeal.threshold + 5))
+        let result: (ready: Bool, created: NormalHealingEpisode?) = healingStateLock.withLock {
+            var created: NormalHealingEpisode?
+            if normalHealingEpisode == nil {
+                let delay = max(0, reactionDelayProvider())
+                let episode = NormalHealingEpisode(
+                    episodeID: UUID(),
+                    startedAt: now,
+                    reactionDelay: delay,
+                    readyAt: now + delay,
+                    bypassed: hpPercent <= emergencyThreshold + 0.000_001
+                )
+                normalHealingEpisode = episode
+                created = episode
+            } else if hpPercent <= emergencyThreshold + 0.000_001 {
+                normalHealingEpisode?.bypassed = true
+            }
+            guard let episode = normalHealingEpisode else { return (false, created) }
+            return (episode.bypassed || now >= episode.readyAt, created)
+        }
+
+        if let episode = result.created {
+            diagnosticLogger?.log("healer_episode_started", fields: [
+                "episodeID": .string(episode.episodeID.uuidString),
+                "healing": .string("normal"),
+                "reactionDelayMs": .double(episode.reactionDelay * 1_000),
+                "bypassed": .bool(episode.bypassed),
+            ])
+        }
+        if !result.ready {
+            logHealingDecision("reaction_wait", priority: .normal)
+        }
+        return result.ready
+    }
+
+    private func logHealingLifecycle(
+        _ event: KeyPressLifecycleEvent,
+        priority: HealingPriority,
+        normalEpisode: NormalHealingEpisode?
+    ) {
+        guard event.phase == .queued || event.phase == .keyDown else { return }
+        var fields: [String: DiagnosticLogValue] = [
+            "requestID": .string(event.requestID.uuidString),
+            "healing": .string(priority == .critical ? "critical" : "normal"),
+            "phase": .string(event.phase.rawValue),
+        ]
+        if let normalEpisode {
+            fields["episodeID"] = .string(normalEpisode.episodeID.uuidString)
+            fields["episodeStartedUptime"] = .double(normalEpisode.startedAt)
+            fields["reactionDelayMs"] = .double(normalEpisode.reactionDelay * 1_000)
+            fields["reactionBypassed"] = .bool(normalEpisode.bypassed)
+        }
+        diagnosticLogger?.log("healer_request", fields: fields)
+    }
+
+    private func healingActionReadyLocked(_ action: HealingAction) -> Bool {
+        healingCooldownRemainingLocked() <= 0 &&
+            (actionKeyDownTimes[action].map { uptimeProvider() - $0 >= action.individualCooldown } ?? true)
     }
 
     private func healingCooldownRemainingLocked() -> TimeInterval {
         guard let lastHealingKeyDownUptime else { return 0 }
         return max(
             0,
-            Self.healingGroupCooldown - (uptimeProvider() - lastHealingKeyDownUptime)
+            lastHealingGroupCooldown - (uptimeProvider() - lastHealingKeyDownUptime)
         )
     }
 

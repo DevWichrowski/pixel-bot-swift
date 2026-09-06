@@ -18,7 +18,6 @@ struct PixelBotApp: App {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayController: OverlayWindowController?
-    private let middleMouseKeyMapper = MiddleMouseKeyMapper()
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide dock icon (menu bar only)
@@ -30,13 +29,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Request permissions
         requestPermissions()
-        middleMouseKeyMapper.start()
         
         print("🤖 Pixel Bot v\(AppVersion.current) started!")
     }
     
     func applicationWillTerminate(_ notification: Notification) {
-        middleMouseKeyMapper.stop()
+        KeyPressService.shared.cancelAll()
         print("🤖 Pixel Bot Swift shutting down...")
     }
     

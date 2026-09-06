@@ -4,12 +4,22 @@ import Foundation
 
 private struct ProcessedBotFrame: @unchecked Sendable {
     let generation: UInt64
-    let mana: NumericReadout
     let ammo: NumericReadout
-    let manaConfirmedCurrent: Int?
     let ammoDecrease: Bool
-    let manaDiagnostic: RegionDiagnostic
     let ammoDiagnostic: RegionDiagnostic
+}
+
+enum HPFrameContinuity: Equatable {
+    case first
+    case continuous
+    case interrupted
+    case repeatedOrOlder
+}
+
+func hpFrameContinuity(previous: TimeInterval?, current: TimeInterval) -> HPFrameContinuity {
+    guard let previous else { return .first }
+    guard current > previous else { return .repeatedOrOlder }
+    return current - previous < 0.250 ? .continuous : .interrupted
 }
 
 /// Coordinates capture, OCR, features, persisted settings, and UI state.
@@ -21,6 +31,23 @@ final class TibiaBot: ObservableObject {
     @Published var errorText = ""
     @Published private(set) var hpReadout = NumericReadout()
     @Published private(set) var manaReadout = NumericReadout()
+    @Published private(set) var shieldReadout = ShieldReadout()
+    @Published var magicShieldEnabled = false {
+        didSet { guard !isHydratingConfig else { return }; magicShield.enabled = magicShieldEnabled; magicShield.cancelPendingActions(); saveConfig() }
+    }
+    @Published var magicShieldHotkey = "R" {
+        didSet { guard !isHydratingConfig else { return }; magicShield.hotkey = magicShieldHotkey; magicShield.cancelPendingActions(); saveConfig() }
+    }
+    @Published var magicShieldThreshold = "25" {
+        didSet { guard !isHydratingConfig else { return }; magicShield.threshold = Int(magicShieldThreshold) ?? 25; magicShield.cancelPendingActions(); saveConfig() }
+    }
+    @Published var middleMouseEnabled = false {
+        didSet { updateMiddleMouseMapper() }
+    }
+    @Published var selectedTibiaPID: Int32 = 0 {
+        didSet { inputTarget.select(selectedTibiaPID); cancelPendingRuntimeActions() }
+    }
+    @Published private(set) var tibiaApplications: [NSRunningApplication] = []
     @Published private(set) var ammoReadout = NumericReadout()
     @Published private(set) var hpDiagnostic: RegionDiagnostic?
     @Published private(set) var manaDiagnostic: RegionDiagnostic?
@@ -47,6 +74,9 @@ final class TibiaBot: ObservableObject {
         case .starting:
             return "Waiting for the first complete capture frame"
         case .running:
+            if startEventListeners && !inputTarget.isForeground {
+                return "Capture is active. Input waits for the selected Tibia application to be foreground."
+            }
             return "Capture is active and OCR data is fresh"
         case .captureFailed:
             return "Screen capture stopped after an error"
@@ -60,6 +90,15 @@ final class TibiaBot: ObservableObject {
 
     // MARK: - Healing settings
 
+    @Published var healingVocation: HealingVocation? {
+        didSet { guard !isHydratingConfig else { return }; healer.vocation = healingVocation; healer.cancelPendingHealing(); saveConfig() }
+    }
+    @Published var healAction: HealingAction? {
+        didSet { guard !isHydratingConfig else { return }; healer.heal.action = healAction; healer.cancelPendingActions(); saveConfig() }
+    }
+    @Published var criticalAction: HealingAction? {
+        didSet { guard !isHydratingConfig else { return }; healer.criticalHeal.action = criticalAction; healer.cancelPendingActions(); saveConfig() }
+    }
     @Published var healEnabled = true {
         didSet {
             guard !isHydratingConfig else { return }
@@ -157,7 +196,6 @@ final class TibiaBot: ObservableObject {
             saveConfig()
         }
     }
-    let healingGroupCooldownText = "1.0"
     @Published var potionCooldown = "0.5" {
         didSet {
             guard !isHydratingConfig else { return }
@@ -307,6 +345,18 @@ final class TibiaBot: ObservableObject {
     private let accessibilityChecker: () -> Bool
     private let startEventListeners: Bool
 
+    private let inputTarget = TibiaInputTarget()
+    private var mouseMapper: MiddleMouseKeyMapper?
+    private var shutdownObserver: NSObjectProtocol?
+    private var focusObserver: NSObjectProtocol?
+    private var applicationObservers: [NSObjectProtocol] = []
+    private var hpDecisionCounts: [Int: Int] = [:]
+    private var lastDecisionTimestamp: TimeInterval?
+    private var latestHP = NumericReadout()
+    private var latestMana = NumericReadout()
+    private var latestShield = ShieldReadout()
+    private var lastUIPublish: [CaptureRegionKind: Date] = [:]
+    let magicShield: AutoMagicShield
     let healer: AutoHealer
     let eater: AutoEater
     let haste: AutoHaste
@@ -323,7 +373,9 @@ final class TibiaBot: ObservableObject {
     private var regionUpdateTask: Task<Void, Never>?
     private var freshnessTask: Task<Void, Never>?
     private var diagnosticRefreshTask: Task<Void, Never>?
-    private var lastAcceptedHPFrameTimestamp: Date?
+    private var lastAcceptedHPFrameTimestamp: TimeInterval?
+    private var lastAcceptedManaFrameTimestamp: TimeInterval?
+    private var lastHPLogAt = Date.distantPast
     private var lastLoggedHP: Int?
 
     init(
@@ -348,6 +400,7 @@ final class TibiaBot: ObservableObject {
         self.ammoReader = ammoReader
         self.regionSelector = regionSelector ?? .shared
         self.keyPress = keyPress
+        self.magicShield = AutoMagicShield(keyPress: keyPress)
         self.healer = healer ?? AutoHealer(
             keyPress: keyPress,
             diagnosticLogger: PixelBotDiagnosticLogger.shared
@@ -365,6 +418,44 @@ final class TibiaBot: ObservableObject {
             }
         }
 
+        if startEventListeners {
+            let target = inputTarget
+            keyPress.setInputAllowed { target.isForeground }
+            self.combo.inputAllowed = { target.isForeground }
+            self.combo.onListenerError = { [weak self] message in
+                Task { @MainActor [weak self] in self?.errorText = message }
+            }
+            self.skinner.inputAllowed = { target.isForeground }
+            self.skinner.onListenerError = { [weak self] message in
+                Task { @MainActor [weak self] in self?.errorText = message }
+            }
+            mouseMapper = MiddleMouseKeyMapper(keyPress: keyPress)
+            mouseMapper?.inputAllowed = { target.isForeground }
+            refreshTibiaApplications()
+            for name in [NSWorkspace.didLaunchApplicationNotification,
+                         NSWorkspace.didTerminateApplicationNotification,
+                         NSWorkspace.didActivateApplicationNotification] {
+                applicationObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
+                    forName: name, object: nil, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.refreshTibiaApplications() }
+                })
+            }
+            focusObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didDeactivateApplicationNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.isRunning, !target.isForeground else { return }
+                    self.keyPress.cancelAll()
+                    self.cancelPendingRuntimeActions()
+                }
+            }
+            shutdownObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.shutdown() }
+            }
+        }
         refreshPermissionState(requestScreenRecording: requestPermissionsOnInit)
         loadConfig(reconfigureCapture: false)
         keyPress.cancelAll()
@@ -372,6 +463,9 @@ final class TibiaBot: ObservableObject {
     }
 
     deinit {
+        if let shutdownObserver { NotificationCenter.default.removeObserver(shutdownObserver) }
+        if let focusObserver { NSWorkspace.shared.notificationCenter.removeObserver(focusObserver) }
+        for observer in applicationObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         captureLifecycleTask?.cancel()
         regionUpdateTask?.cancel()
         freshnessTask?.cancel()
@@ -390,12 +484,70 @@ final class TibiaBot: ObservableObject {
         }
     }
 
+    func shutdown() {
+        stop()
+        configManager.flush()
+    }
+
+    private func updateMiddleMouseMapper() {
+        mouseMapper?.enabled = isRunning && middleMouseEnabled
+        if isRunning && middleMouseEnabled {
+            if mouseMapper?.start() == false { errorText = "Middle mouse listener failed. Check Accessibility permission." }
+        } else { mouseMapper?.stop() }
+    }
+
+    private func refreshTibiaApplications() {
+        tibiaApplications = NSWorkspace.shared.runningApplications.filter {
+            !$0.isTerminated && ($0.bundleIdentifier == "com.tibia.client"
+                || ($0.bundleIdentifier == nil && $0.localizedName?.lowercased() == "tibia"))
+        }
+        let resolved = Self.resolveTibiaPID(selected: selectedTibiaPID,
+            available: tibiaApplications.map(\.processIdentifier))
+        if selectedTibiaPID != resolved { selectedTibiaPID = resolved }
+        inputTarget.select(resolved)
+    }
+
+    nonisolated static func resolveTibiaPID(selected: Int32, available: [Int32]) -> Int32 {
+        if available.contains(selected) { return selected }
+        return available.count == 1 ? available[0] : 0
+    }
+
+    private var hasControlCollision: Bool {
+        guard comboEnabled else { return false }
+        let outputs = [healHotkey, criticalHotkey, manaHotkey, spiritPotionHotkey,
+                       eaterHotkey, hasteHotkey, skinnerHotkey, comboHotkey,
+                       autoLootHotkey, utitoTempoHotkey, magicShieldHotkey]
+        return outputs.contains { $0.lowercased() == comboStartStopHotkey.lowercased() }
+    }
+
+    private func inputIsReady() -> Bool {
+        guard !hasControlCollision else {
+            errorText = "Combo control hotkey conflicts with an output hotkey. Choose separate keys."
+            keyPress.cancelAll()
+            cancelPendingRuntimeActions()
+            return false
+        }
+        if startEventListeners && !accessibilityChecker() {
+            errorText = "Accessibility permission is no longer available. Restore permission before input can resume."
+        }
+        guard !startEventListeners || (inputTarget.isForeground && accessibilityChecker()) else {
+            keyPress.cancelAll()
+            cancelPendingRuntimeActions()
+            return false
+        }
+        keyPress.resume()
+        return true
+    }
+
     // MARK: - Configuration
 
     private func loadConfig(reconfigureCapture: Bool) {
         let config = configManager.config
         isHydratingConfig = true
 
+        healingVocation = config.healer.vocation
+        healAction = config.healer.healAction
+        criticalAction = config.healer.criticalAction
         healEnabled = config.healer.healEnabled
         healThreshold = String(config.healer.healThreshold)
         healHotkey = config.healer.healHotkey
@@ -414,6 +566,9 @@ final class TibiaBot: ObservableObject {
         eaterEnabled = config.eater.enabled
         foodType = config.eater.foodType
         eaterHotkey = config.eater.hotkey
+        magicShieldEnabled = config.magicShield.enabled
+        magicShieldHotkey = config.magicShield.hotkey
+        magicShieldThreshold = String(config.magicShield.threshold)
         hasteEnabled = config.haste.enabled
         hasteHotkey = config.haste.hotkey
         skinnerEnabled = config.skinner.enabled
@@ -438,6 +593,7 @@ final class TibiaBot: ObservableObject {
 
         applyCompleteConfigurationToFeatures()
         isHydratingConfig = false
+        inputTarget.setControlsValid(!hasControlCollision)
 
         let regions = captureRegions(from: config.regions)
         captureRegions = regions
@@ -446,15 +602,18 @@ final class TibiaBot: ObservableObject {
     }
 
     private func applyCompleteConfigurationToFeatures() {
+        healer.vocation = healingVocation
         healer.heal = HealConfig(
             enabled: healEnabled,
             threshold: Int(healThreshold) ?? 75,
-            hotkey: healHotkey
+            hotkey: healHotkey,
+            action: healAction
         )
         healer.criticalHeal = HealConfig(
             enabled: criticalEnabled,
             threshold: Int(criticalThreshold) ?? 50,
-            hotkey: criticalHotkey
+            hotkey: criticalHotkey,
+            action: criticalAction
         )
         healer.manaRestore = HealConfig(
             enabled: manaEnabled,
@@ -470,6 +629,9 @@ final class TibiaBot: ObservableObject {
         eater.setFoodType(foodType)
         eater.hotkey = eaterHotkey
         eater.toggle(isRunning && eaterEnabled)
+        magicShield.enabled = magicShieldEnabled
+        magicShield.hotkey = magicShieldHotkey
+        magicShield.threshold = Int(magicShieldThreshold) ?? 25
         haste.hotkey = hasteHotkey
         haste.toggle(isRunning && hasteEnabled)
         skinner.hotkey = skinnerHotkey
@@ -488,8 +650,15 @@ final class TibiaBot: ObservableObject {
 
     private func saveConfig() {
         guard !isHydratingConfig else { return }
+        cancelPendingRuntimeActions()
+        hpDecisionCounts.removeAll()
+        lastDecisionTimestamp = nil
+        inputTarget.setControlsValid(!hasControlCollision)
 
         var config = configManager.config
+        config.healer.vocation = healingVocation
+        config.healer.healAction = healAction
+        config.healer.criticalAction = criticalAction
         config.healer.healEnabled = healEnabled
         config.healer.healThreshold = Int(healThreshold) ?? 75
         config.healer.healHotkey = healHotkey
@@ -503,11 +672,13 @@ final class TibiaBot: ObservableObject {
         config.healer.manaEnabled = manaEnabled
         config.healer.manaThreshold = Int(manaThreshold) ?? 60
         config.healer.manaHotkey = manaHotkey
-        config.healer.spellCooldown = AutoHealer.healingGroupCooldown
         config.healer.potionCooldown = Double(potionCooldown) ?? 0.5
         config.eater.enabled = eaterEnabled
         config.eater.foodType = foodType
         config.eater.hotkey = eaterHotkey
+        config.magicShield.enabled = magicShieldEnabled
+        config.magicShield.hotkey = magicShieldHotkey
+        config.magicShield.threshold = Int(magicShieldThreshold) ?? 25
         config.haste.enabled = hasteEnabled
         config.haste.hotkey = hasteHotkey
         config.skinner.enabled = skinnerEnabled
@@ -681,7 +852,7 @@ final class TibiaBot: ObservableObject {
         _ frame: CapturedFrame,
         region: CaptureRegion,
         kind: CaptureRegionKind
-    ) -> (NumericReadout, RegionDiagnostic) {
+    ) -> (NumericReadout, RegionDiagnostic, ShieldReadout?) {
         let now = Date()
         switch kind {
         case .hp, .mana:
@@ -695,7 +866,8 @@ final class TibiaBot: ObservableObject {
             let readout = kind == .hp ? result?.hp : result?.mana
             return (
                 readout ?? NumericReadout(state: .invalid),
-                reader.diagnostic(for: kind, at: now)
+                reader.diagnostic(for: kind, at: now),
+                kind == .mana ? result?.shield : nil
             )
         case .ammo:
             let reader = AmmoReader(mode: .diagnostic)
@@ -703,13 +875,14 @@ final class TibiaBot: ObservableObject {
             let result = reader.process(frame, now: now)
             return (
                 result?.readout ?? NumericReadout(state: .invalid),
-                reader.diagnostic(at: now)
+                reader.diagnostic(at: now),
+                nil
             )
         }
     }
 
     private func applyDiagnosticResult(
-        _ result: (NumericReadout, RegionDiagnostic),
+        _ result: (NumericReadout, RegionDiagnostic, ShieldReadout?),
         kind: CaptureRegionKind
     ) {
         switch kind {
@@ -718,6 +891,7 @@ final class TibiaBot: ObservableObject {
             hpDiagnostic = result.1
         case .mana:
             manaReadout = result.0
+            shieldReadout = result.2 ?? ShieldReadout()
             manaDiagnostic = result.1
         case .ammo:
             ammoReadout = result.0
@@ -733,6 +907,7 @@ final class TibiaBot: ObservableObject {
 
     func start() {
         guard !isRunning else { return }
+        if startEventListeners { refreshTibiaApplications() }
         refreshPermissionState(requestScreenRecording: true)
 
         guard screenRecordingGranted, accessibilityGranted else {
@@ -750,6 +925,7 @@ final class TibiaBot: ObservableObject {
         runState = .starting
         firstCompleteFrameAt = nil
         lastAcceptedHPFrameTimestamp = nil
+        lastAcceptedManaFrameTimestamp = nil
         lastLoggedHP = nil
         activeSession = UUID()
         let session = activeSession
@@ -780,15 +956,16 @@ final class TibiaBot: ObservableObject {
                         }
                     }
                 ) else { return }
+                let manaDiagnostic = hpManaReader.diagnostic(for: .mana)
+                Task { @MainActor [weak self] in
+                    self?.acceptVitals(vitalResult, diagnostic: manaDiagnostic, session: session)
+                }
                 let ammoResult = ammoReader.process(frame)
                 let processedAt = Date()
                 let processed = ProcessedBotFrame(
                     generation: frame.generation,
-                    mana: vitalResult.mana,
                     ammo: ammoResult?.readout ?? ammoReader.readout(at: processedAt),
-                    manaConfirmedCurrent: vitalResult.manaConfirmedCurrent,
                     ammoDecrease: ammoReader.consumeDecreaseEvent(),
-                    manaDiagnostic: hpManaReader.diagnostic(for: .mana, at: processedAt),
                     ammoDiagnostic: ammoReader.diagnostic(at: processedAt)
                 )
                 Task { @MainActor [weak self] in
@@ -830,11 +1007,13 @@ final class TibiaBot: ObservableObject {
         expectedCaptureGeneration = nil
         firstCompleteFrameAt = nil
         lastAcceptedHPFrameTimestamp = nil
+        lastAcceptedManaFrameTimestamp = nil
         lastLoggedHP = nil
         freshnessTask?.cancel()
         regionUpdateTask = nil
         diagnosticRefreshTask = nil
         runState = .stopped
+        PixelBotDiagnosticLogger.shared.log("runtime_metrics", fields: DiagnosticMetrics.shared.snapshot())
         errorText = ""
         keyPress.cancelAll()
         pauseRuntimeFeatures()
@@ -852,10 +1031,11 @@ final class TibiaBot: ObservableObject {
             return
         }
 
-        manaReadout = refreshed(frame.mana)
-        ammoReadout = refreshed(frame.ammo)
-        manaDiagnostic = refreshed(frame.manaDiagnostic, using: manaReadout)
-        ammoDiagnostic = refreshed(frame.ammoDiagnostic, using: ammoReadout)
+        let freshAmmo = refreshed(frame.ammo)
+        if shouldPublish(.ammo, stateChanged: ammoReadout.state != freshAmmo.state) {
+            ammoReadout = freshAmmo
+            ammoDiagnostic = refreshed(frame.ammoDiagnostic, using: freshAmmo)
+        }
         if firstCompleteFrameAt == nil {
             firstCompleteFrameAt = Date()
         }
@@ -873,22 +1053,45 @@ final class TibiaBot: ObservableObject {
         }
 
         let readout = refreshed(hpStage.readout, at: now)
-        guard let timestamp = readout.timestamp,
-              lastAcceptedHPFrameTimestamp.map({ timestamp >= $0 }) ?? true else {
-            return
+        guard let timestamp = readout.timestamp else { return }
+        let frameTime = readout.captureUptime ?? timestamp.timeIntervalSinceReferenceDate
+        let previousHPFrameTimestamp = lastAcceptedHPFrameTimestamp
+        let continuity = hpFrameContinuity(previous: previousHPFrameTimestamp, current: frameTime)
+        guard continuity != .repeatedOrOlder else { return }
+        if continuity == .interrupted {
+            healer.resetNormalHealingEpisode()
         }
-        lastAcceptedHPFrameTimestamp = timestamp
-        hpReadout = readout
-        hpDiagnostic = refreshed(hpStage.diagnostic, using: readout, at: now)
+        lastAcceptedHPFrameTimestamp = frameTime
+        latestHP = readout
+        if shouldPublish(.hp, stateChanged: hpReadout.state != readout.state, now: now) {
+            hpReadout = readout
+            hpDiagnostic = refreshed(hpStage.diagnostic, using: readout, at: now)
+        }
+        guard inputIsReady() else { return }
+        magicShield.evaluate(hp: latestHP, mana: latestMana, shield: latestShield)
+        let thresholds = Set([Int(healThreshold) ?? 75, Int(criticalThreshold) ?? 50, Int(spiritPotionThreshold) ?? 40])
+        let decisionFrame = readout.captureUptime ?? timestamp.timeIntervalSinceReferenceDate
+        if lastDecisionTimestamp.map({ decisionFrame > $0 }) ?? true {
+            let continuous = lastDecisionTimestamp.map { decisionFrame - $0 < 0.250 } ?? false
+            lastDecisionTimestamp = decisionFrame
+            for threshold in thresholds {
+                let below = readout.state == .valid && (readout.current ?? 0) > 0
+                    && Double(readout.current ?? 0) * 100 < Double(readout.maximum ?? 0) * Double(threshold)
+                hpDecisionCounts[threshold] = below ? min(2, (continuous ? hpDecisionCounts[threshold, default: 0] : 0) + 1) : 0
+            }
+        }
 
         guard readout.state == .valid, let hp = hpStage.confirmedCurrent else {
+            hpDecisionCounts.removeAll()
             healer.cancelPendingHPDependentActions()
             return
         }
         if let maximum = readout.maximum {
             healer.setMaxHP(maximum)
         }
-        if lastLoggedHP != hp {
+        healer.cancelInvalidHPRequests(currentHP: hp)
+        if lastLoggedHP != hp && now.timeIntervalSince(lastHPLogAt) >= 0.1 {
+            lastHPLogAt = now
             PixelBotDiagnosticLogger.shared.log("hp_changed", fields: [
                 "frameAgeMs": .double(max(0, now.timeIntervalSince(timestamp)) * 1_000),
             ])
@@ -898,9 +1101,41 @@ final class TibiaBot: ObservableObject {
             currentHP: hp,
             validFor: max(
                 0,
-                NumericRegionOCRPipeline.staleInterval - now.timeIntervalSince(timestamp)
+                NumericRegionOCRPipeline.staleInterval - (readout.freshness(at: now) ?? 0.250)
             )
         )
+    }
+
+    private func shouldPublish(_ kind: CaptureRegionKind, stateChanged: Bool, now: Date = Date()) -> Bool {
+        guard stateChanged || now.timeIntervalSince(lastUIPublish[kind] ?? .distantPast) >= 0.1 else { return false }
+        lastUIPublish[kind] = now
+        return true
+    }
+
+    private func acceptVitals(_ frame: HPManaFrameReadout, diagnostic: RegionDiagnostic, session: UUID) {
+        guard session == activeSession,
+              frame.generation == expectedCaptureGeneration,
+              frame.generation == screenCapture.currentGeneration,
+              screenCapture.runState != .captureFailed else {
+            return
+        }
+        if let frameTime = frame.mana.captureUptime ?? frame.mana.timestamp?.timeIntervalSinceReferenceDate {
+            guard lastAcceptedManaFrameTimestamp.map({ frameTime >= $0 }) ?? true else { return }
+            lastAcceptedManaFrameTimestamp = frameTime
+        }
+        latestMana = refreshed(frame.mana)
+        latestShield = frame.shield
+        if shouldPublish(.mana, stateChanged: manaReadout.state != latestMana.state || shieldReadout.state != latestShield.state) {
+            manaReadout = latestMana
+            shieldReadout = latestShield
+            manaDiagnostic = refreshed(diagnostic, using: latestMana)
+        }
+        guard inputIsReady() else { return }
+        magicShield.evaluate(hp: latestHP, mana: latestMana, shield: latestShield)
+        if latestMana.state == .valid, let mana = frame.manaConfirmedCurrent {
+            if let maximum = latestMana.maximum { healer.setMaxMana(maximum) }
+            healer.checkAndRestoreMana(currentMana: mana, validFor: max(0, 0.250 - (latestMana.freshness() ?? 0.250)))
+        } else { healer.cancelPendingManaActions() }
     }
 
     private func handleCaptureState(_ state: BotRunState, session: UUID) {
@@ -924,7 +1159,7 @@ final class TibiaBot: ObservableObject {
         case .stopped:
             break
         case .stale:
-            runState = .stale
+            if runState != .stale { runState = .stale }
         }
     }
 
@@ -1014,6 +1249,12 @@ final class TibiaBot: ObservableObject {
     }
 
     private func clearPublishedPipelineState(for regions: CaptureRegions) {
+        latestHP = NumericReadout()
+        latestMana = NumericReadout()
+        latestShield = ShieldReadout()
+        shieldReadout = ShieldReadout()
+        hpDecisionCounts.removeAll()
+        lastDecisionTimestamp = nil
         hpReadout = NumericReadout(state: regions.hp == nil ? .unconfigured : .invalid)
         manaReadout = NumericReadout(state: regions.mana == nil ? .unconfigured : .invalid)
         ammoReadout = NumericReadout(state: regions.ammo == nil ? .unconfigured : .invalid)
@@ -1026,26 +1267,35 @@ final class TibiaBot: ObservableObject {
         freshnessTask?.cancel()
         freshnessTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 50_000_000)
+                try? await Task.sleep(nanoseconds: 100_000_000)
                 guard let self, self.activeSession == session, self.isRunning else { return }
+                if self.inputIsReady() {
+                    self.magicShield.evaluate(hp: self.latestHP, mana: self.latestMana, shield: self.latestShield)
+                }
                 self.refreshPublishedFreshness()
             }
         }
     }
 
     private func refreshPublishedFreshness() {
-        hpReadout = refreshed(hpReadout)
-        manaReadout = refreshed(manaReadout)
-        ammoReadout = refreshed(ammoReadout)
-        if let diagnostic = hpDiagnostic {
-            hpDiagnostic = refreshed(diagnostic, using: hpReadout)
+        let hpState = latestHP.state(at: Date())
+        let manaState = latestMana.state(at: Date())
+        let ammoState = ammoReadout.state(at: Date())
+        if hpReadout.state != hpState {
+            hpReadout = refreshed(latestHP)
+            if let diagnostic = hpDiagnostic { hpDiagnostic = refreshed(diagnostic, using: hpReadout) }
         }
-        if let diagnostic = manaDiagnostic {
-            manaDiagnostic = refreshed(diagnostic, using: manaReadout)
+        if manaReadout.state != manaState {
+            manaReadout = refreshed(latestMana)
+            if let diagnostic = manaDiagnostic { manaDiagnostic = refreshed(diagnostic, using: manaReadout) }
         }
-        if let diagnostic = ammoDiagnostic {
-            ammoDiagnostic = refreshed(diagnostic, using: ammoReadout)
+        if ammoReadout.state != ammoState {
+            ammoReadout = refreshed(ammoReadout)
+            if let diagnostic = ammoDiagnostic { ammoDiagnostic = refreshed(diagnostic, using: ammoReadout) }
         }
+        let shieldState = latestShield.state(at: Date())
+        if shieldReadout.state != shieldState { shieldReadout.state = shieldState }
+        if latestMana.state(at: Date()) != .valid { healer.cancelPendingManaActions() }
         if hpReadout.state != .valid {
             healer.cancelPendingHPDependentActions()
         }
@@ -1073,45 +1323,59 @@ final class TibiaBot: ObservableObject {
 
     private func refreshRunState(at date: Date = Date()) {
         guard isRunning, screenCapture.runState != .captureFailed else { return }
-        let requiredAreValid = hpReadout.state == .valid && manaReadout.state == .valid
+        let requiredAreValid = latestHP.state(at: date) == .valid && latestMana.state(at: date) == .valid
         if requiredAreValid {
-            runState = .running
+            if runState != .running { runState = .running }
             return
         }
 
         if let firstCompleteFrameAt,
            date.timeIntervalSince(firstCompleteFrameAt) >= NumericRegionOCRPipeline.staleInterval {
-            runState = .stale
+            if runState != .stale { runState = .stale }
         }
     }
 
     // MARK: - Feature evaluation
 
     private func evaluateHP(currentHP: Int, validFor: TimeInterval) {
+        let normalConfirmed = hpDecisionCounts[Int(healThreshold) ?? 75, default: 0] >= 2
+        let criticalConfirmed = hpDecisionCounts[Int(criticalThreshold) ?? 50, default: 0] >= 2
+        let spiritConfirmed = hpDecisionCounts[Int(spiritPotionThreshold) ?? 40, default: 0] >= 2
+        evaluateHP(
+            currentHP: currentHP,
+            validFor: validFor,
+            normalConfirmed: normalConfirmed,
+            criticalConfirmed: criticalConfirmed,
+            spiritConfirmed: spiritConfirmed
+        )
+    }
+
+    /// Internal seam for verifying the production healing-mode routing.
+    func evaluateHP(
+        currentHP: Int,
+        validFor: TimeInterval,
+        normalConfirmed: Bool,
+        criticalConfirmed: Bool,
+        spiritConfirmed: Bool
+    ) {
         if spiritPotionHeal {
-            _ = healer.checkSpiritPotionHeal(currentHP: currentHP, validFor: validFor)
-            healer.checkNormalHealOnly(currentHP: currentHP, validFor: validFor)
+            _ = healer.checkSpiritPotionHeal(currentHP: currentHP, validFor: validFor,
+                                            allowCritical: criticalConfirmed,
+                                            allowNormal: normalConfirmed,
+                                            allowPotion: spiritConfirmed)
         } else if criticalIsPotion {
-            _ = healer.checkCriticalPotionHeal(currentHP: currentHP, validFor: validFor)
+            if criticalConfirmed { _ = healer.checkCriticalPotionHeal(currentHP: currentHP, validFor: validFor) }
+            if normalConfirmed { healer.checkNormalHealOnly(currentHP: currentHP, validFor: validFor) }
+        } else if criticalConfirmed {
+            healer.checkAndHeal(currentHP: currentHP, validFor: validFor, allowNormal: normalConfirmed)
+        } else if normalConfirmed {
             healer.checkNormalHealOnly(currentHP: currentHP, validFor: validFor)
-        } else {
-            healer.checkAndHeal(currentHP: currentHP, validFor: validFor)
         }
     }
 
     private func evaluateManaAndOtherFeatures(using frame: ProcessedBotFrame) {
-        let now = Date()
-        let manaIsValid = frame.mana.state(at: now) == .valid
-        let ammoIsValid = frame.ammo.state(at: now) == .valid
-        let mana = manaIsValid ? frame.manaConfirmedCurrent : nil
-
-        if manaIsValid, let maximum = frame.mana.maximum {
-            healer.setMaxMana(maximum)
-        }
-
-        if let mana {
-            healer.checkAndRestoreMana(currentMana: mana)
-        }
+        guard inputIsReady() else { return }
+        let ammoIsValid = frame.ammo.state(at: Date()) == .valid
 
         let nonCriticalActions: [() -> Void] = [
             { [weak self] in self?.eater.checkAndEat() },
@@ -1120,7 +1384,8 @@ final class TibiaBot: ObservableObject {
                 guard let self else { return }
                 self.combo.checkAndPress()
                 self.combo.checkPaladinCombo(
-                    ammoDecreased: ammoIsValid && frame.ammoDecrease
+                    ammoDecreased: ammoIsValid && frame.ammoDecrease,
+                    validFor: max(0, 0.250 - (frame.ammo.freshness() ?? 0.250))
                 )
             },
         ]
@@ -1131,6 +1396,7 @@ final class TibiaBot: ObservableObject {
     // MARK: - Runtime features and permissions
 
     private func resumeRuntimeFeatures() {
+        updateMiddleMouseMapper()
         eater.toggle(eaterEnabled)
         haste.toggle(hasteEnabled)
         skinner.toggle(skinnerEnabled)
@@ -1141,6 +1407,9 @@ final class TibiaBot: ObservableObject {
     }
 
     private func pauseRuntimeFeatures() {
+        mouseMapper?.enabled = false
+        mouseMapper?.stop()
+        magicShield.cancelPendingActions()
         healer.cancelPendingActions()
         eater.toggle(false)
         haste.toggle(false)
@@ -1150,6 +1419,7 @@ final class TibiaBot: ObservableObject {
     }
 
     private func cancelPendingRuntimeActions() {
+        magicShield.cancelPendingActions()
         healer.cancelPendingActions()
         eater.cancelPendingActions()
         haste.cancelPendingActions()
@@ -1218,5 +1488,18 @@ final class TibiaBot: ObservableObject {
             return "---/---"
         }
         return "\(current)/\(maximum)"
+    }
+}
+
+/// The selected process is checked again by the input queue immediately before key-down.
+private final class TibiaInputTarget: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pid: Int32 = 0
+    private var controlsValid = true
+    func setControlsValid(_ value: Bool) { lock.withLock { controlsValid = value } }
+    func select(_ value: Int32) { lock.withLock { pid = value } }
+    var isForeground: Bool {
+        let selected = lock.withLock { controlsValid ? pid : 0 }
+        return selected > 0 && NSWorkspace.shared.frontmostApplication?.processIdentifier == selected
     }
 }

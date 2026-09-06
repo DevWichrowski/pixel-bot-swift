@@ -1,63 +1,83 @@
 import Foundation
 
-/// Auto haste that recasts every 31-33 seconds
-class AutoHaste {
-    private let keyPress: any KeyPressServicing
-    private let keyPressGroup = KeyPressRequestGroup()
-    
-    var enabled: Bool = false
-    var hotkey: String = "x"
-    
-    private var nextCastTime: Date = .distantFuture
-    
-    init(keyPress: any KeyPressServicing = KeyPressService.shared) {
-        self.keyPress = keyPress
+/// Support cooldown is independent of the Healing group and starts at actual input dispatch.
+final class SupportCooldown {
+    static let shared = SupportCooldown()
+    let hasteGroup = KeyPressRequestGroup()
+    private let lock = NSLock()
+    private var lastKeyDown: TimeInterval?
+    private var shieldPending = false
+
+    func isReady(at now: TimeInterval) -> Bool {
+        lock.withLock { lastKeyDown.map { now - $0 >= 2 } ?? true }
     }
 
-    deinit {
-        cancelPendingActions()
+    func recordKeyDown(at now: TimeInterval) {
+        lock.withLock { lastKeyDown = now }
     }
-    
-    /// Toggle auto haste
+
+    func setShieldPending(_ pending: Bool) {
+        lock.withLock { shieldPending = pending }
+    }
+
+    var mayRequestHaste: Bool { lock.withLock { !shieldPending } }
+}
+
+class AutoHaste {
+    private let keyPress: any KeyPressServicing
+    private let support: SupportCooldown
+    private let lock = NSLock()
+    private var pending = false
+    private var nextCastUptime: TimeInterval = .infinity
+    var enabled: Bool = false
+    var hotkey: String = "x"
+
+    init(keyPress: any KeyPressServicing = KeyPressService.shared, support: SupportCooldown = .shared) {
+        self.keyPress = keyPress
+        self.support = support
+    }
+
+    deinit { cancelPendingActions() }
+
     func toggle(_ enabled: Bool) {
         self.enabled = enabled
-        
         if enabled {
-            // Schedule first cast (don't cast immediately)
-            let delay = humanRandom(median: 32.0, spread: 0.06, min: 30.5, max: 38.0)
-            nextCastTime = Date().addingTimeInterval(delay)
-            
-            let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm:ss"
-            print("⚡ Auto Haste ENABLED (Hotkey: \(hotkey)). First cast at \(formatter.string(from: nextCastTime)) (in \(String(format: "%.1f", delay))s)")
+            lock.withLock { nextCastUptime = ProcessInfo.processInfo.systemUptime + nextDelay() }
         } else {
             cancelPendingActions()
-            print("⚡ Auto Haste DISABLED")
         }
     }
-    
-    /// Check if it's time to cast haste
+
     func checkAndCast() {
-        guard enabled else { return }
-        
-        if Date() >= nextCastTime {
-            castNow()
+        let now = ProcessInfo.processInfo.systemUptime
+        guard enabled, support.mayRequestHaste, support.isReady(at: now) else { return }
+        let shouldEnqueue = lock.withLock { () -> Bool in
+            guard !pending, now >= nextCastUptime else { return false }
+            pending = true
+            return true
         }
+        guard shouldEnqueue else { return }
+        let accepted = keyPress.pressKey(hotkey, priority: .regular, group: support.hasteGroup,
+                                        validUntil: now + 0.25, isValid: { [support] in
+                                            support.mayRequestHaste && support.isReady(at: ProcessInfo.processInfo.systemUptime)
+                                        }) { [weak self] event in
+            guard let self else { return }
+            if event.phase == .keyDown {
+                self.support.recordKeyDown(at: event.timestamp)
+                self.lock.withLock { self.nextCastUptime = event.timestamp + self.nextDelay() }
+            }
+            if [.keyUp, .cancelled, .failed].contains(event.phase) {
+                self.lock.withLock { self.pending = false }
+            }
+        }
+        if !accepted { lock.withLock { pending = false } }
     }
-    
-    private func castNow() {
-        keyPress.pressKey(hotkey, priority: .regular, group: keyPressGroup)
-        
-        // Schedule the next cast with the existing randomized variance.
-        let delay = humanRandom(median: 32.0, spread: 0.06, min: 30.5, max: 38.0)
-        nextCastTime = Date().addingTimeInterval(delay)
-        
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        print("⚡ Cast Haste. Next cast at \(formatter.string(from: nextCastTime)) (in \(String(format: "%.1f", delay))s)")
+
+    private func nextDelay() -> TimeInterval {
+        humanRandom(median: 32.0, spread: 0.06, min: 30.5, max: 38.0)
     }
 
     func cancelPendingActions() {
-        keyPress.cancelPendingRequests(in: keyPressGroup)
+        keyPress.cancelPendingRequests(in: support.hasteGroup)
     }
 }

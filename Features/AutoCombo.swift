@@ -1,6 +1,11 @@
 import Foundation
 import Cocoa
 
+enum ComboStanceMode: String, Codable {
+    case manual
+    case legacyTimedSpell
+}
+
 /// Auto Combo - presses combo key every 2-2.1 seconds when active
 class AutoCombo {
     private let keyPress: any KeyPressServicing
@@ -28,6 +33,7 @@ class AutoCombo {
         }
     }
     var recastUtito: Bool = false
+    var stanceMode: ComboStanceMode = .manual
     
     /// Paladin Combo settings (mutually exclusive with Utito Tempo)
     var paladinComboEnabled: Bool = false {
@@ -69,6 +75,8 @@ class AutoCombo {
     
     /// UI callback
     var onActiveChanged: ((Bool) -> Void)?
+    var inputAllowed: () -> Bool = { true }
+    var onListenerError: ((String) -> Void)?
     
     init(
         keyPress: any KeyPressServicing = KeyPressService.shared,
@@ -116,6 +124,7 @@ class AutoCombo {
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
+            onListenerError?("Combo keyboard listener failed. Check Accessibility permission.")
             print("❌ Failed to create keyboard tap for combo")
             return
         }
@@ -128,11 +137,18 @@ class AutoCombo {
             CGEvent.tapEnable(tap: tap, enable: true)
             isListening = true
             print("⚔️ Combo listener started")
+        } else {
+            CFMachPortInvalidate(tap)
+            eventTap = nil
+            onListenerError?("Combo keyboard listener could not attach to the main run loop.")
         }
     }
     
     func stopListener() {
-        if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
+        }
         if let source = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         eventTap = nil
         runLoopSource = nil
@@ -158,6 +174,8 @@ class AutoCombo {
     }
     
     private func handleKeyDown(_ event: CGEvent) {
+        guard inputAllowed(), event.getIntegerValueField(.keyboardEventAutorepeat) == 0,
+              event.flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty else { return }
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let key = keyCodeToString(Int(keyCode))
         
@@ -199,8 +217,12 @@ class AutoCombo {
         print(enabled ? "⚔️ Auto Combo ENABLED" : "⚔️ Auto Combo DISABLED")
     }
     
+    var hasControlCollision: Bool {
+        [comboHotkey, utitoTempoHotkey, autoLootHotkey].contains { $0.lowercased() == startStopHotkey.lowercased() }
+    }
+
     func toggleActive() {
-        guard enabled else { return }
+        guard enabled, inputAllowed(), !hasControlCollision else { return }
         
         let wasActive = isActive
         isActive = !isActive
@@ -210,7 +232,7 @@ class AutoCombo {
             randomizeInterval()
             
             // Use Utito Tempo if enabled
-            if utitoTempoEnabled {
+            if utitoTempoEnabled && stanceMode == .legacyTimedSpell {
                 keyPress.pressKey(utitoTempoHotkey, priority: .regular, group: keyPressGroup)
                 lastUtitoTime = Date()
                 currentUtitoDuration = randomUtitoDuration()
@@ -225,6 +247,7 @@ class AutoCombo {
             
             print("⚔️ Combo STARTED")
         } else {
+            cancelPendingActions()
             print("⚔️ Combo STOPPED")
             
             // Press auto loot after stopping (if enabled)
@@ -278,7 +301,10 @@ class AutoCombo {
     
     /// Called from main loop - presses combo every 2-2.1s when active
     func checkAndPress() {
-        guard enabled else { return }
+        guard enabled, inputAllowed() else {
+            cancelPendingActions()
+            return
+        }
         
         // Ensure keyboard tap is still active
         ensureTapEnabled()
@@ -288,7 +314,7 @@ class AutoCombo {
         let now = Date()
         
         // Re-cast Utito Tempo with random interval 9-12 seconds if enabled
-        if recastUtito && utitoTempoEnabled {
+        if stanceMode == .legacyTimedSpell && recastUtito && utitoTempoEnabled {
             if now.timeIntervalSince(lastUtitoTime) >= currentUtitoDuration {
                 keyPress.pressKey(utitoTempoHotkey, priority: .regular, group: keyPressGroup)
                 lastUtitoTime = now
@@ -309,15 +335,16 @@ class AutoCombo {
     private var lastPaladinComboTime: Date = .distantPast
     private var currentPaladinCooldown: TimeInterval = 0.7
 
-    func checkPaladinCombo(ammoDecreased: Bool) {
-        guard enabled && isActive && paladinComboEnabled && ammoDecreased else { return }
+    func checkPaladinCombo(ammoDecreased: Bool, validFor: TimeInterval = 0.25) {
+        guard enabled && isActive && paladinComboEnabled && ammoDecreased && inputAllowed() else { return }
 
         let now = Date()
         guard now.timeIntervalSince(lastPaladinComboTime) >= currentPaladinCooldown else { return }
 
         lastPaladinComboTime = now
         currentPaladinCooldown = humanRandom(median: 0.7, spread: 0.2, min: 0.5, max: 1.1)
-        keyPress.pressKey(comboHotkey, priority: .regular, group: keyPressGroup)
+        keyPress.pressKey(comboHotkey, priority: .regular, group: keyPressGroup,
+                          validUntil: ProcessInfo.processInfo.systemUptime + max(0, min(0.25, validFor)), lifecycle: nil)
         print("🏹 Paladin Combo triggered (ammo decreased)")
     }
 }
